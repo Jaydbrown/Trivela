@@ -15,6 +15,7 @@ npm run dev
 - `PORT`: Server port (default `3001`)
 - `CORS_ALLOWED_ORIGINS`: Comma-separated allowed origins for CORS (example: `https://app.example.com,https://admin.example.com`)
 - `CORS_ORIGIN`: Legacy single-origin CORS setting (fallback when `CORS_ALLOWED_ORIGINS` is not set)
+- `JSON_BODY_LIMIT`: Max JSON request body size (default `100kb`; rejects larger bodies with `413`)
 - `STELLAR_NETWORK`: Explicit named network preset, `testnet` or `mainnet`
 - `SOROBAN_RPC_URL`: Optional Soroban RPC override exposed in API metadata
 - `HORIZON_URL`: Optional Horizon override exposed in API metadata
@@ -24,6 +25,7 @@ npm run dev
 - `TRIVELA_API_KEY`: Optional API key for write endpoints (see below)
 - `RATE_LIMIT_WINDOW_MS`: Rate limit window for `/api/*` and `/api/v1/*` routes (default `60000`)
 - `RATE_LIMIT_MAX_REQUESTS`: Max requests per API key or IP in each window (default `60`)
+- `RPC_HEALTH_POLL_INTERVAL_MS`: Background Soroban RPC health poll interval (default `60000`; set `0` to disable)
 
 ## API Key Authentication
 
@@ -78,6 +80,10 @@ Legacy routes remain available under `/api/*` for backward compatibility:
 - `DELETE /api/campaigns/:id`
 
 **Migration note:** New integrations should use `/api/v1/*`. Existing clients on `/api/*` continue to work.
+
+## Security Defaults
+
+The API sets baseline security headers on all responses (for example `X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy`, and a restrictive `Content-Security-Policy`). `Strict-Transport-Security` is only applied when requests are served over HTTPS (or when `X-Forwarded-Proto: https` is present).
 
 ## API Endpoints
 
@@ -252,7 +258,8 @@ List all campaigns with pagination.
       "description": "Earn points for completing onboarding",
       "active": true,
       "rewardPerAction": 10,
-      "createdAt": "2024-04-01T00:00:00.000Z"
+      "createdAt": "2024-04-01T00:00:00.000Z",
+      "updatedAt": "2024-04-01T00:00:00.000Z"
     }
   ],
   "pagination": {
@@ -297,7 +304,8 @@ Get a single campaign by ID.
   "description": "Earn points for completing onboarding",
   "active": true,
   "rewardPerAction": 10,
-  "createdAt": "2024-04-01T00:00:00.000Z"
+  "createdAt": "2024-04-01T00:00:00.000Z",
+  "updatedAt": "2024-04-01T00:00:00.000Z"
 }
 ```
 
@@ -339,7 +347,8 @@ Create a new campaign. Requires API key if `TRIVELA_API_KEY` is set.
   "description": "Earn points throughout summer",
   "active": true,
   "rewardPerAction": 25,
-  "createdAt": "2024-04-24T10:30:00.000Z"
+  "createdAt": "2024-04-24T10:30:00.000Z",
+  "updatedAt": "2024-04-24T10:30:00.000Z"
 }
 ```
 
@@ -428,7 +437,8 @@ Update an existing campaign. Requires API key if `TRIVELA_API_KEY` is set.
   "description": "Updated description",
   "active": false,
   "rewardPerAction": 30,
-  "createdAt": "2024-04-24T10:30:00.000Z"
+  "createdAt": "2024-04-24T10:30:00.000Z",
+  "updatedAt": "2024-04-24T10:45:00.000Z"
 }
 ```
 
@@ -496,6 +506,21 @@ Validation rules:
 - `rewardPerAction` must be a non-negative number (`POST` required, `PUT` optional if omitted)
 - `description` must be a string when provided
 - `active` must be a boolean when provided
+
+## Audit Logs (Admin)
+
+Write operations on campaigns emit audit log entries. Audit logs are retrievable via an admin-only endpoint.
+
+#### GET /api/v1/audit-logs
+
+Requires API key if `TRIVELA_API_KEY` is set.
+
+**Query Parameters (optional):**
+
+- `entity` – Filter by entity (example: `campaign`)
+- `entityId` – Filter by entity id
+- `action` – Filter by action (`create`, `update`, `delete`)
+- `page`, `limit`, `offset` – Same pagination params as other list endpoints
 
 ## Docker
 

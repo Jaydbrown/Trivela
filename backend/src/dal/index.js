@@ -1,10 +1,13 @@
 import { assertCampaignRepository } from './campaignRepository.js';
 import { createSqliteCampaignRepository } from './sqliteCampaignRepository.js';
+import { assertAuditLogRepository } from './auditLogRepository.js';
+import { createSqliteAuditLogRepository } from './sqliteAuditLogRepository.js';
 
 export function createDal({
   dbPath = ':memory:',
   campaigns = [],
   campaignRepository,
+  auditLogRepository,
 } = {}) {
   return {
     campaigns: assertCampaignRepository(
@@ -13,6 +16,9 @@ export function createDal({
           dbPath,
           seed: campaigns,
         }),
+    ),
+    auditLogs: assertAuditLogRepository(
+      auditLogRepository ?? createSqliteAuditLogRepository({ dbPath }),
     ),
   };
 }

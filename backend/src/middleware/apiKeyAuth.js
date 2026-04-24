@@ -16,6 +16,10 @@ export default function createApiKeyAuth({
     const provided = req.headers['x-api-key'] || req.query.api_key;
 
     if (provided === apiKey) {
+      req.auth = {
+        type: 'apiKey',
+        apiKey: String(provided),
+      };
       return next();
     }
 

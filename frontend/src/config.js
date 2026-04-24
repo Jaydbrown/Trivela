@@ -15,8 +15,47 @@ const STELLAR_NETWORKS = {
   },
 };
 
+const CONTRACT_ID_PATTERN = /^C[A-Z2-7]{55}$/;
+
 function trimTrailingSlash(value) {
   return value.replace(/\/+$/, '');
+}
+
+function validateFrontendEnv(env = import.meta.env) {
+  const errors = [];
+
+  const apiUrl = env.VITE_API_URL;
+  if (apiUrl) {
+    try {
+      const parsed = new URL(apiUrl);
+      if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+        errors.push(`VITE_API_URL must be http(s): "${apiUrl}"`);
+      }
+    } catch {
+      errors.push(`VITE_API_URL must be a valid URL: "${apiUrl}"`);
+    }
+  }
+
+  const network = env.VITE_STELLAR_NETWORK;
+  if (network && !STELLAR_NETWORKS[String(network).trim().toLowerCase()]) {
+    errors.push(
+      `Unsupported VITE_STELLAR_NETWORK "${network}". Expected one of: ${Object.keys(STELLAR_NETWORKS).join(', ')}`,
+    );
+  }
+
+  const rewardsContractId = env.VITE_REWARDS_CONTRACT_ID;
+  if (rewardsContractId && !CONTRACT_ID_PATTERN.test(String(rewardsContractId).trim())) {
+    errors.push('VITE_REWARDS_CONTRACT_ID must be a valid Stellar contract ID');
+  }
+
+  const campaignContractId = env.VITE_CAMPAIGN_CONTRACT_ID;
+  if (campaignContractId && !CONTRACT_ID_PATTERN.test(String(campaignContractId).trim())) {
+    errors.push('VITE_CAMPAIGN_CONTRACT_ID must be a valid Stellar contract ID');
+  }
+
+  if (errors.length > 0) {
+    throw new Error(['Invalid frontend environment configuration:', ...errors.map((e) => `- ${e}`)].join('\n'));
+  }
 }
 
 function resolveNetworkConfig({
@@ -35,6 +74,8 @@ function resolveNetworkConfig({
     horizonUrl: horizonUrl || preset.horizonUrl,
   };
 }
+
+validateFrontendEnv();
 
 export const API_BASE_URL = trimTrailingSlash(import.meta.env.VITE_API_URL || '');
 

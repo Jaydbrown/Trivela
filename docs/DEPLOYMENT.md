@@ -12,6 +12,8 @@ This guide covers deploying Trivela (backend, frontend, and smart contracts) to 
 
 ## Environment Matrix
 
+Trivela validates environment variables on startup/build to fail fast with actionable errors.
+
 ### Backend Environment Variables
 
 | Variable                  | Required | Default | Example                                                    | Notes                                  |
@@ -23,7 +25,8 @@ This guide covers deploying Trivela (backend, frontend, and smart contracts) to 
 | `STELLAR_NETWORK_PASSPHRASE` | No    | preset  | `Public Global Stellar Network ; September 2015`           | Passphrase override for the network    |
 | `CORS_ALLOWED_ORIGINS`    | No       | —       | `https://app.example.com,https://admin.example.com`        | Comma-separated allowed origins        |
 | `CORS_ORIGIN`             | No       | —       | `https://app.example.com`                                  | Legacy single-origin CORS (fallback)   |
-| `TRIVELA_API_KEY`         | No       | —       | `sk_prod_abc123...`                                        | API key for write endpoints (optional) |
+| `TRIVELA_API_KEYS`        | No       | —       | `sk_prod_old,sk_prod_new`                                  | Comma-separated API keys for rotation (optional) |
+| `TRIVELA_API_KEY`         | No       | —       | `sk_prod_abc123...`                                        | Legacy single API key (optional)       |
 | `REWARDS_CONTRACT_ID`     | No       | —       | `CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABSC4` | Rewards contract address               |
 | `CAMPAIGN_CONTRACT_ID`    | No       | —       | `CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABSC4` | Campaign contract address              |
 | `RATE_LIMIT_WINDOW_MS`    | No       | `60000` | `60000`                                                    | Rate limit window in milliseconds      |
@@ -33,7 +36,7 @@ This guide covers deploying Trivela (backend, frontend, and smart contracts) to 
 
 | Variable                          | Required | Default | Example                                                    | Notes                     |
 | --------------------------------- | -------- | ------- | ---------------------------------------------------------- | ------------------------- |
-| `VITE_API_URL`                    | Yes      | —       | `https://api.example.com`                                  | Backend API base URL      |
+| `VITE_API_URL`                    | Yes      | —       | `https://api.example.com`                                  | Backend API base URL (can be omitted in local dev to use proxy) |
 | `VITE_STELLAR_NETWORK`            | Yes      | —       | `mainnet`                                                  | Named network preset      |
 | `VITE_SOROBAN_RPC_URL`            | No       | preset  | `https://soroban-mainnet.stellar.org`                      | Soroban RPC override      |
 | `VITE_HORIZON_URL`                | No       | preset  | `https://horizon.stellar.org`                              | Horizon override          |
@@ -85,7 +88,7 @@ STELLAR_NETWORK=mainnet
 SOROBAN_RPC_URL=https://soroban-mainnet.stellar.org
 HORIZON_URL=https://horizon.stellar.org
 CORS_ALLOWED_ORIGINS=https://app.example.com
-TRIVELA_API_KEY=sk_prod_<random-secure-key>
+TRIVELA_API_KEYS=sk_prod_<old-key>,sk_prod_<new-key>
 REWARDS_CONTRACT_ID=<contract-id>
 CAMPAIGN_CONTRACT_ID=<contract-id>
 RATE_LIMIT_MAX_REQUESTS=100

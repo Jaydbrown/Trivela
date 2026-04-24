@@ -12,6 +12,7 @@ import logger from './middleware/logger.js';
 import { paginateItems } from './pagination.js';
 import { checkSorobanRpcHealth } from './sorobanRpc.js';
 import { resolveStellarNetworkConfig } from './config/stellarNetwork.js';
+import { validateBackendEnv } from './config/envValidation.js';
 import { createDal } from './dal/index.js';
 
 const DEFAULT_PORT = 3001;
@@ -133,7 +134,12 @@ function validateCampaignPayload(payload, { partial = false } = {}) {
 
 
 export function createApp(options = {}) {
-  const apiKey = options.apiKey ?? process.env.TRIVELA_API_KEY ?? '';
+  const apiKeys =
+    options.apiKeys ??
+    (options.apiKey ? [options.apiKey] : null) ??
+    process.env.TRIVELA_API_KEYS ??
+    process.env.TRIVELA_API_KEY ??
+    '';
   const corsAllowedOrigins =
     options.corsAllowedOrigins ?? process.env.CORS_ALLOWED_ORIGINS ?? process.env.CORS_ORIGIN;
   const stellarConfig = resolveStellarNetworkConfig({
@@ -188,7 +194,7 @@ export function createApp(options = {}) {
     requestErrors: 0,
     routeHits: new Map(),
   };
-  const requireApiKey = createApiKeyAuth({ apiKey });
+  const requireApiKey = createApiKeyAuth({ apiKeys });
   const rateLimiter = createRateLimiter({
     windowMs: rateLimitWindowMs,
     maxRequests: rateLimitMaxRequests,
@@ -450,6 +456,10 @@ export function createApp(options = {}) {
 }
 
 export function startServer(options = {}) {
+  if (!options.skipEnvValidation) {
+    validateBackendEnv(process.env);
+  }
+
   const app = createApp(options);
   const port = options.port ?? process.env.PORT ?? DEFAULT_PORT;
 

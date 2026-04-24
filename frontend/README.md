@@ -62,7 +62,9 @@ npm run build-storybook
 
 ## Environment variables
 
-Create a `.env.local` file in `frontend/` when you need to point the app at non-default services.
+Use `frontend/.env.example` as a starting point. Create a `.env.local` file in `frontend/` when you need to point the app at non-default services.
+
+The frontend validates env values at startup/build time and will fail with a clear error if they are invalid.
 
 ```bash
 VITE_API_URL=http://localhost:3001

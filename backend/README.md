@@ -12,6 +12,8 @@ npm run dev
 
 ## Environment
 
+The backend validates configuration on startup and fails fast with clear messages when values are invalid.
+
 - `PORT`: Server port (default `3001`)
 - `CORS_ALLOWED_ORIGINS`: Comma-separated allowed origins for CORS (example: `https://app.example.com,https://admin.example.com`)
 - `CORS_ORIGIN`: Legacy single-origin CORS setting (fallback when `CORS_ALLOWED_ORIGINS` is not set)
@@ -21,27 +23,32 @@ npm run dev
 - `STELLAR_NETWORK_PASSPHRASE`: Optional passphrase override for the chosen network preset
 - `REWARDS_CONTRACT_ID`: Optional rewards contract ID exposed by `/api/v1/config`
 - `CAMPAIGN_CONTRACT_ID`: Optional campaign contract ID exposed by `/api/v1/config`
-- `TRIVELA_API_KEY`: Optional API key for write endpoints (see below)
+- `TRIVELA_API_KEYS`: Optional comma-separated API keys for write endpoints (supports rotation; see below)
+- `TRIVELA_API_KEY`: Legacy single API key (still supported)
 - `RATE_LIMIT_WINDOW_MS`: Rate limit window for `/api/*` and `/api/v1/*` routes (default `60000`)
 - `RATE_LIMIT_MAX_REQUESTS`: Max requests per API key or IP in each window (default `60`)
 
 ## API Key Authentication
 
 Write endpoints (`POST`, `PUT`, `DELETE`) are protected by an **optional** API
-key. The behaviour depends on whether `TRIVELA_API_KEY` is set:
+key. The behaviour depends on whether `TRIVELA_API_KEYS`/`TRIVELA_API_KEY` is set:
 
-| `TRIVELA_API_KEY`     | Behaviour                                                            |
-| --------------------- | -------------------------------------------------------------------- |
-| **Not set** (default) | All endpoints are open — convenient for local development.           |
-| **Set to a value**    | Write endpoints require the key. Read endpoints (`GET`) remain open. |
+| Config                                         | Behaviour                                                            |
+| ---------------------------------------------- | -------------------------------------------------------------------- |
+| **No keys set** (default)                      | All endpoints are open — convenient for local development.           |
+| `TRIVELA_API_KEYS=old,new` (comma-separated)   | Write endpoints accept any configured key (supports rotation).       |
+| `TRIVELA_API_KEY=single` (legacy)              | Write endpoints accept the single configured key.                    |
 
 ### Supplying the key
 
-Include it in one of two ways:
+Include it in one of these ways (headers preferred):
 
 ```
 # Header (recommended)
 X-API-Key: <your-key>
+
+# Authorization header (also supported)
+Authorization: Bearer <your-key>
 
 # Query parameter
 GET /api/v1/campaigns?api_key=<your-key>
@@ -317,7 +324,7 @@ curl http://localhost:3001/api/v1/campaigns/campaign-1
 
 #### POST /api/v1/campaigns
 
-Create a new campaign. Requires API key if `TRIVELA_API_KEY` is set.
+Create a new campaign. Requires API key if `TRIVELA_API_KEYS`/`TRIVELA_API_KEY` is set.
 
 **Request Body:**
 
@@ -406,7 +413,7 @@ curl -X POST "http://localhost:3001/api/v1/campaigns?api_key=sk_prod_abc123" \
 
 #### PUT /api/v1/campaigns/:id
 
-Update an existing campaign. Requires API key if `TRIVELA_API_KEY` is set.
+Update an existing campaign. Requires API key if `TRIVELA_API_KEYS`/`TRIVELA_API_KEY` is set.
 
 **Request Body (all fields optional):**
 
@@ -463,7 +470,7 @@ curl -X PUT http://localhost:3001/api/v1/campaigns/campaign-2 \
 
 #### DELETE /api/v1/campaigns/:id
 
-Delete a campaign. Requires API key if `TRIVELA_API_KEY` is set.
+Delete a campaign. Requires API key if `TRIVELA_API_KEYS`/`TRIVELA_API_KEY` is set.
 
 **Response (204 No Content):**
 
@@ -514,6 +521,6 @@ docker run --rm -p 3001:3001 \
   -e SOROBAN_RPC_URL=https://soroban-testnet.stellar.org \
   -e HORIZON_URL=https://horizon-testnet.stellar.org \
   -e CORS_ALLOWED_ORIGINS=http://localhost:5173 \
-  -e TRIVELA_API_KEY=dev-secret \
+  -e TRIVELA_API_KEYS=dev-secret \
   trivela-backend
 ```

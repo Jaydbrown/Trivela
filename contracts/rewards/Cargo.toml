@@ -5,6 +5,7 @@ edition = "2021"
 publish = false
 rust-version = "1.75.0"
 description = "Trivela on-chain rewards and points contract"
+license = "Apache-2.0"
 
 [lib]
 crate-type = ["cdylib", "rlib"]

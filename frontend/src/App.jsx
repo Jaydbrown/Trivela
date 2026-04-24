@@ -4,7 +4,11 @@ import Landing from './Landing';
 import CampaignDetail from './CampaignDetail';
 import AdminCampaigns from './AdminCampaigns';
 import { applyTheme, getPreferredTheme, THEME_STORAGE_KEY } from './theme';
-import { getRuntimeConfig, initializeRuntimeConfig } from './config';
+import {
+  getRuntimeConfig,
+  initializeRuntimeConfig,
+  setRuntimeStellarNetwork,
+} from './config';
 import {
   getWalletAddress,
   fetchWalletBalance,
@@ -118,6 +122,20 @@ export default function App() {
     setWalletError('');
   };
 
+  const handleChangeStellarNetwork = async (nextNetwork) => {
+    const nextConfig = setRuntimeStellarNetwork(nextNetwork);
+    setRuntimeConfig(nextConfig);
+    logSafeEvent('stellar_network_switched', { network: nextConfig.stellar.network });
+
+    if (walletAddress) {
+      try {
+        await loadWalletBalance(walletAddress);
+      } catch (_error) {
+        // Keep existing wallet UI; individual sections will show errors as needed.
+      }
+    }
+  };
+
   return (
     <Routes>
       <Route
@@ -127,6 +145,8 @@ export default function App() {
             runtimeConfig={runtimeConfig}
             theme={theme}
             onToggleTheme={toggleTheme}
+            stellarNetwork={runtimeConfig.stellar.network}
+            onChangeStellarNetwork={handleChangeStellarNetwork}
             walletAddress={walletAddress}
             walletBalance={walletBalance}
             rewardsPoints={rewardsPoints}
@@ -146,6 +166,8 @@ export default function App() {
           <CampaignDetail
             theme={theme}
             onToggleTheme={toggleTheme}
+            stellarNetwork={runtimeConfig.stellar.network}
+            onChangeStellarNetwork={handleChangeStellarNetwork}
             walletAddress={walletAddress}
             walletBalance={walletBalance}
             rewardsPoints={rewardsPoints}
@@ -164,6 +186,8 @@ export default function App() {
           <AdminCampaigns
             theme={theme}
             onToggleTheme={toggleTheme}
+            stellarNetwork={runtimeConfig.stellar.network}
+            onChangeStellarNetwork={handleChangeStellarNetwork}
             walletAddress={walletAddress}
             walletBalance={walletBalance}
             isWalletLoading={isWalletLoading}

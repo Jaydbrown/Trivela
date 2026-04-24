@@ -233,6 +233,24 @@ export function createApp(options = {}) {
     next();
   });
 
+  const SCHEMA_VERSION_HEADER = 'X-Trivela-Schema-Version';
+  const SCHEMA_VERSION = '1';
+
+  app.use((req, res, next) => {
+    res.setHeader(SCHEMA_VERSION_HEADER, SCHEMA_VERSION);
+
+    const requestedVersion = req.get(SCHEMA_VERSION_HEADER);
+    if (requestedVersion && requestedVersion !== SCHEMA_VERSION) {
+      return res.status(400).json({
+        error: 'Unsupported API schema version',
+        supported: SCHEMA_VERSION,
+        requested: requestedVersion,
+      });
+    }
+
+    return next();
+  });
+
   const jobRunner = createJobRunner({
     handlers: {
       async rpc_health_poll() {

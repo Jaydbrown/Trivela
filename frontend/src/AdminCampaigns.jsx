@@ -8,6 +8,8 @@ import './Landing.css';
 export default function AdminCampaigns({
   theme,
   onToggleTheme,
+  stellarNetwork,
+  onChangeStellarNetwork,
   walletAddress,
   walletBalance,
   isWalletLoading,
@@ -47,6 +49,8 @@ export default function AdminCampaigns({
       <Header
         theme={theme}
         onToggleTheme={onToggleTheme}
+        stellarNetwork={stellarNetwork}
+        onChangeStellarNetwork={onChangeStellarNetwork}
         walletAddress={walletAddress}
         walletBalance={walletBalance}
         isWalletLoading={isWalletLoading}

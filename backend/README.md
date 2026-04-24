@@ -81,6 +81,18 @@ Legacy routes remain available under `/api/*` for backward compatibility:
 
 **Migration note:** New integrations should use `/api/v1/*`. Existing clients on `/api/*` continue to work.
 
+## Response schema versioning
+
+All responses include a schema version header:
+
+```
+X-Trivela-Schema-Version: 1
+```
+
+Clients may also send `X-Trivela-Schema-Version` on requests. When present and unsupported, the API responds with `400` and includes the supported version in both the response header and body.
+
+**Schema stability:** Within a given schema version, responses aim to be backward compatible (additive changes are preferred; breaking changes require a new schema version).
+
 ## Security Defaults
 
 The API sets baseline security headers on all responses (for example `X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy`, and a restrictive `Content-Security-Policy`). `Strict-Transport-Security` is only applied when requests are served over HTTPS (or when `X-Forwarded-Proto: https` is present).

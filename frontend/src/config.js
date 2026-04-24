@@ -38,9 +38,15 @@ function resolveNetworkConfig({
 
 export const API_BASE_URL = trimTrailingSlash(import.meta.env.VITE_API_URL || '');
 
+const DEV_NETWORK_STORAGE_KEY = 'trivela:stellarNetwork';
+
 let runtimeConfig = {
   stellar: resolveNetworkConfig({
-    network: import.meta.env.VITE_STELLAR_NETWORK,
+    network: import.meta.env.DEV
+      ? (typeof window !== 'undefined'
+          ? window.localStorage.getItem(DEV_NETWORK_STORAGE_KEY)
+          : null) || import.meta.env.VITE_STELLAR_NETWORK
+      : import.meta.env.VITE_STELLAR_NETWORK,
     networkPassphrase: import.meta.env.VITE_STELLAR_NETWORK_PASSPHRASE,
     sorobanRpcUrl: import.meta.env.VITE_SOROBAN_RPC_URL,
     horizonUrl: import.meta.env.VITE_HORIZON_URL,
@@ -102,6 +108,24 @@ export function getRuntimeConfig() {
     contracts: { ...runtimeConfig.contracts },
     sources: { ...runtimeConfig.sources },
   };
+}
+
+export function setRuntimeStellarNetwork(network) {
+  const next = resolveNetworkConfig({ network });
+  runtimeConfig = {
+    ...runtimeConfig,
+    stellar: next,
+    sources: {
+      ...runtimeConfig.sources,
+      stellar: 'dev-switcher',
+    },
+  };
+
+  if (import.meta.env.DEV && typeof window !== 'undefined') {
+    window.localStorage.setItem(DEV_NETWORK_STORAGE_KEY, next.network);
+  }
+
+  return getRuntimeConfig();
 }
 
 export function getSorobanRpcUrl() {

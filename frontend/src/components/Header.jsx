@@ -1,3 +1,5 @@
+import DevNetworkSwitcher from './DevNetworkSwitcher';
+
 function truncateWalletAddress(walletAddress) {
   if (!walletAddress) return '';
   if (walletAddress.length <= 14) return walletAddress;
@@ -13,6 +15,8 @@ const NAV_LINKS = [
 export default function Header({
   theme = 'dark',
   onToggleTheme,
+  stellarNetwork = 'testnet',
+  onChangeStellarNetwork,
   walletAddress = '',
   walletBalance = '',
   isWalletBalanceLoading = false,
@@ -21,6 +25,7 @@ export default function Header({
   onDisconnectWallet,
 }) {
   const nextTheme = theme === 'dark' ? 'light' : 'dark';
+  const balanceLabel = `${stellarNetwork === 'mainnet' ? 'Mainnet' : 'Testnet'} balance`;
 
   return (
     <header className="site-header">
@@ -40,6 +45,8 @@ export default function Header({
           </div>
 
           <div className="nav-utilities">
+            <DevNetworkSwitcher network={stellarNetwork} onChange={onChangeStellarNetwork} />
+
             {walletAddress && (
               <p className="nav-wallet" aria-live="polite">
                 <span className="nav-wallet-label">Wallet</span>
@@ -49,7 +56,7 @@ export default function Header({
 
             {walletAddress && (
               <p className="nav-wallet nav-wallet-balance" aria-live="polite">
-                <span className="nav-wallet-label">Testnet balance</span>
+                <span className="nav-wallet-label">{balanceLabel}</span>
                 <span className="nav-wallet-value">
                   {isWalletBalanceLoading ? 'Loading…' : walletBalance || '0 XLM'}
                 </span>

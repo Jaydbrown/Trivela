@@ -22,6 +22,7 @@ import {
   getStellarNetwork,
   getRewardsContractId,
 } from './config';
+import { ERROR_MESSAGES, getErrorMessage } from './lib/errorMapping';
 
 export {
   getCampaignContractId,
@@ -91,10 +92,35 @@ export function formatWalletBalance(balance) {
 export function normalizeError(error) {
   if (!error) return 'Unable to load points right now.';
 
+  const extractErrorCode = (value) => {
+    const text =
+      typeof value === 'string'
+        ? value
+        : value?.message || value?.toString?.() || '';
+
+    const patterns = [
+      /Error\(Contract,\s*#(\d+)\)/i,
+      /contract.*?#(\d+)/i,
+      /code[:\s]+(\d+)/i,
+    ];
+
+    for (const pattern of patterns) {
+      const match = text.match(pattern);
+      if (match) return Number(match[1]);
+    }
+
+    return null;
+  };
+
   const message =
     typeof error === 'string'
       ? error
       : error.message || error.toString?.() || 'Unable to load points right now.';
+
+  const errorCode = extractErrorCode(error);
+  if (typeof errorCode === 'number' && Number.isFinite(errorCode)) {
+    if (ERROR_MESSAGES[errorCode]) return getErrorMessage(errorCode);
+  }
 
   if (/not found|missing|404/i.test(message)) {
     return 'Rewards contract is not deployed on the configured Soroban network yet.';

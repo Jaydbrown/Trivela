@@ -12,6 +12,8 @@ import './CampaignDetail.css';
 export default function CampaignDetail({
   theme,
   onToggleTheme,
+  stellarNetwork,
+  onChangeStellarNetwork,
   walletAddress,
   walletBalance,
   rewardsPoints,
@@ -78,6 +80,8 @@ export default function CampaignDetail({
       <Header
         theme={theme}
         onToggleTheme={onToggleTheme}
+        stellarNetwork={stellarNetwork}
+        onChangeStellarNetwork={onChangeStellarNetwork}
         walletAddress={walletAddress}
         walletBalance={walletBalance}
         isWalletBalanceLoading={isWalletBalanceLoading}

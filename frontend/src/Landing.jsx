@@ -37,6 +37,8 @@ export default function Landing({
   runtimeConfig,
   theme,
   onToggleTheme,
+  stellarNetwork,
+  onChangeStellarNetwork,
   walletAddress,
   walletBalance,
   isWalletLoading,
@@ -128,6 +130,8 @@ export default function Landing({
       <Header
         theme={theme}
         onToggleTheme={onToggleTheme}
+        stellarNetwork={stellarNetwork || runtimeConfig?.stellar?.network}
+        onChangeStellarNetwork={onChangeStellarNetwork}
         walletAddress={walletAddress}
         walletBalance={walletBalance}
         isWalletBalanceLoading={isWalletBalanceLoading}

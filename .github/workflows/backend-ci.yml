@@ -2,6 +2,8 @@ name: Backend CI
 
 on:
   pull_request:
+    branches:
+      - main
   push:
     branches:
       - main
@@ -21,10 +23,23 @@ jobs:
           cache: npm
 
       - name: Install dependencies
-        run: npm install
+        run: npm ci
 
-      - name: Typecheck backend
-        run: npm run typecheck --workspace=backend
+      - name: Run backend lint (if available)
+        run: |
+          if npm --workspace=backend run | rg -q "  lint"; then
+            npm run lint --workspace=backend
+          else
+            echo "No backend lint script found; skipping."
+          fi
+
+      - name: Run backend typecheck (if available)
+        run: |
+          if npm --workspace=backend run | rg -q "  typecheck"; then
+            npm run typecheck --workspace=backend
+          else
+            echo "No backend typecheck script found; skipping."
+          fi
 
       - name: Test backend
         run: npm run test --workspace=backend

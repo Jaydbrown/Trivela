@@ -410,6 +410,34 @@ test('POST /api/v1/campaigns creates a new campaign and returns it', async () =>
   }
 });
 
+test('POST /api/campaigns creates a new campaign via legacy route', async () => {
+  const { server, baseUrl } = await startTestServer();
+
+  try {
+    const newCampaign = {
+      name: 'Legacy Campaign',
+      description: 'Created through legacy route',
+      rewardPerAction: 15,
+    };
+    const response = await fetch(`${baseUrl}/api/campaigns`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(newCampaign),
+    });
+
+    assert.equal(response.status, 201);
+    const created = await response.json();
+    assert.equal(created.name, newCampaign.name);
+    assert.equal(created.description, newCampaign.description);
+    assert.equal(created.rewardPerAction, newCampaign.rewardPerAction);
+    campaignShapeAssertions(created);
+  } finally {
+    await stopTestServer(server);
+  }
+});
+
 test('PUT /api/v1/campaigns/:id updates an existing campaign and returns 404 when missing', async () => {
   const { server, baseUrl } = await startTestServer();
 

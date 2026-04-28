@@ -62,3 +62,10 @@ flowchart LR
 ### 4) Operational observability
 1. Health checks: `/health`, `/health/rpc`.
 2. Metrics scrape: `/metrics` (request totals, errors, route hit counters, uptime gauge).
+
+## Future: upgradeability
+
+- Keep contract IDs stable while evolving logic by using Soroban Wasm upgrades plus explicit schema migrations.
+- Move toward a deployer/governance-controlled upgrade authority instead of relying on a single long-lived admin key.
+- Maintain a repeatable rollout sequence: install Wasm -> upgrade -> migrate -> verify `schema_version`.
+- Full migration details and runbook: see `docs/upgradeability.md`.

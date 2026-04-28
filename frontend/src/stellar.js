@@ -23,6 +23,7 @@ import {
   getRewardsContractId,
 } from './config';
 import { ERROR_MESSAGES, getErrorMessage } from './lib/errorMapping';
+import { walletManager } from './lib/wallet/index.js';
 
 export {
   getCampaignContractId,
@@ -31,7 +32,33 @@ export {
   getRewardsContractId,
 } from './config';
 
-/* ---------- Freighter helpers ---------- */
+/* ---------- Wallet helpers ---------- */
+
+export async function connectWallet(providerName = 'Freighter') {
+  return walletManager.connect(providerName);
+}
+
+export async function disconnectWallet() {
+  return walletManager.disconnect();
+}
+
+export async function getWalletAddress() {
+  return walletManager.getAddress();
+}
+
+export async function isWalletConnected() {
+  return walletManager.isConnected();
+}
+
+export async function getAvailableWallets() {
+  return walletManager.getAvailableProviders();
+}
+
+export function getActiveWallet() {
+  return walletManager.getActiveProviderName();
+}
+
+/* ---------- Legacy Freighter helpers (deprecated) ---------- */
 
 export function getFreighterApi() {
   const freighterApi = window.freighterApi;
@@ -43,30 +70,6 @@ export function getFreighterApi() {
   }
 
   return freighterApi;
-}
-
-export async function getWalletAddress() {
-  const freighterApi = getFreighterApi();
-
-  const freighterStatus = await freighterApi.isConnected();
-  if (freighterStatus.error) throw new Error(freighterStatus.error);
-  if (!freighterStatus.isConnected) {
-    throw new Error(
-      'Freighter extension was not detected. Install or unlock Freighter to connect a wallet.',
-    );
-  }
-
-  const existingAddress = await freighterApi.getAddress();
-  if (existingAddress.error) throw new Error(existingAddress.error);
-  if (existingAddress.address) return existingAddress.address;
-
-  const access = await freighterApi.requestAccess();
-  if (access.error) throw new Error(access.error);
-  if (!access.address) {
-    throw new Error('Freighter did not return a wallet address.');
-  }
-
-  return access.address;
 }
 
 /* ---------- formatting ---------- */
@@ -206,17 +209,14 @@ export async function submitClaimTransaction(walletAddress, amount) {
   /* 2. Simulate & prepare (assembles auth + resources) */
   const preparedTx = await server.prepareTransaction(tx);
 
-  /* 3. Sign with Freighter */
-  const freighterApi = getFreighterApi();
-  const signResult = await freighterApi.signTransaction(preparedTx.toXDR(), {
+  /* 3. Sign with wallet */
+  const signedTxXdr = await walletManager.signTransaction(preparedTx.toXDR(), {
     networkPassphrase: getNetworkPassphrase(),
     address: walletAddress,
   });
 
-  if (signResult.error) throw new Error(signResult.error);
-
   /* 4. Re-construct the signed transaction */
-  const signedTx = TransactionBuilder.fromXDR(signResult.signedTxXdr, getNetworkPassphrase());
+  const signedTx = TransactionBuilder.fromXDR(signedTxXdr, getNetworkPassphrase());
 
   /* 5. Submit */
   const sendResult = await server.sendTransaction(signedTx);
@@ -316,17 +316,14 @@ export async function submitRegisterTransaction(walletAddress) {
   /* 2. Simulate & prepare */
   const preparedTx = await server.prepareTransaction(tx);
 
-  /* 3. Sign with Freighter */
-  const freighterApi = getFreighterApi();
-  const signResult = await freighterApi.signTransaction(preparedTx.toXDR(), {
+  /* 3. Sign with wallet */
+  const signedTxXdr = await walletManager.signTransaction(preparedTx.toXDR(), {
     networkPassphrase: getNetworkPassphrase(),
     address: walletAddress,
   });
 
-  if (signResult.error) throw new Error(signResult.error);
-
   /* 4. Re-construct signed transaction */
-  const signedTx = TransactionBuilder.fromXDR(signResult.signedTxXdr, getNetworkPassphrase());
+  const signedTx = TransactionBuilder.fromXDR(signedTxXdr, getNetworkPassphrase());
 
   /* 5. Submit */
   const sendResult = await server.sendTransaction(signedTx);

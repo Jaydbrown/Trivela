@@ -6,8 +6,9 @@
 import cors from 'cors';
 import express from 'express';
 import { pathToFileURL } from 'node:url';
+import Redis from 'ioredis';
 import createApiKeyAuth from './middleware/apiKeyAuth.js';
-import { createRateLimiter } from './middleware/rateLimit.js';
+import { createRateLimiter, createRedisStore } from './middleware/rateLimit.js';
 import requestLogger, { log } from './middleware/logger.js';
 import requestId from './middleware/requestId.js';
 import securityHeaders from './middleware/securityHeaders.js';
@@ -200,10 +201,31 @@ export async function createApp(options = {}) {
   const requireApiKey = createApiKeyAuth({
     apiKeys: /** @type {string} */ (options.apiKeys) ?? /** @type {string} */ (options.apiKey) ?? process.env.TRIVELA_API_KEYS ?? process.env.TRIVELA_API_KEY ?? '',
   });
+
+  let rateLimitStore = null;
+  const redisUrl = process.env.REDIS_URL || process.env.REDIS_HOST;
+  if (redisUrl && !options.disableRedis) {
+    try {
+      const redisClient = new Redis(redisUrl, {
+        maxRetriesPerRequest: 3,
+        enableReadyCheck: true,
+        lazyConnect: false,
+      });
+      redisClient.on('error', (err) => {
+        log.error({ err }, 'Redis connection error');
+      });
+      rateLimitStore = createRedisStore(redisClient);
+      log.info({ redisUrl: redisUrl.replace(/:[^:@]+@/, ':***@') }, 'Rate limiter using Redis store');
+    } catch (error) {
+      log.warn({ err: error }, 'Failed to connect to Redis, falling back to in-memory rate limiter');
+    }
+  }
+
   const rateLimiter = createRateLimiter({
     windowMs: rateLimitWindowMs,
     maxRequests: rateLimitMaxRequests,
     timeProvider: /** @type {any} */ (options.rateLimit)?.timeProvider,
+    store: rateLimitStore,
   });
 
   app.use(requestId);

@@ -2,6 +2,13 @@
 
 REST API for the Trivela campaign and rewards platform. Handles campaign metadata, health checks, and Soroban RPC configuration for the frontend.
 
+## API Documentation
+
+The complete API specification is available in [OpenAPI 3.1 format](./openapi.yaml). You can view it using:
+- [Swagger Editor](https://editor.swagger.io/) - paste the spec content
+- [Redoc](https://redocly.github.io/redoc/) - for a clean documentation view
+- Any OpenAPI-compatible tool
+
 ## Setup
 
 ```bash

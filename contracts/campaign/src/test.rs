@@ -209,7 +209,7 @@ fn test_capacity_reached() {
     let (leaf, proof) = no_proof_args(&env);
     assert!(client.register(&p1, &leaf, &proof));
     let result = client.try_register(&p2, &leaf, &proof);
-    assert_eq!(result, Err(Ok(Error::CapacityReached)));
+    assert_eq!(result, Err(Ok(Error::CapReached)));
 }
 
 // ── Merkle tests ──────────────────────────────────────────────────────────────

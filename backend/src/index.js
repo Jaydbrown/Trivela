@@ -121,10 +121,14 @@ function validateContractId(value, label) {
 
 /** @param {Record<string, unknown>} options @returns {import('express').Application} */
 export function createApp(options = {}) {
+  const isProduction = process.env.NODE_ENV === 'production';
   const jsonBodyLimit =
     /** @type {string} */ (options.jsonBodyLimit) ?? process.env.JSON_BODY_LIMIT ?? DEFAULT_JSON_BODY_LIMIT;
-  const corsAllowedOrigins =
-    /** @type {string | undefined} */ (options.corsAllowedOrigins) ?? process.env.CORS_ALLOWED_ORIGINS ?? process.env.CORS_ORIGIN;
+  const corsAllowedOriginsRaw =
+    /** @type {string | undefined} */ (options.corsAllowedOrigins) ??
+    process.env.CORS_ALLOWED_ORIGINS ??
+    process.env.CORS_ORIGIN ??
+    (isProduction ? '' : 'http://localhost:5173');
   const stellarConfig = resolveStellarNetworkConfig({
     network: /** @type {string} */ (options.stellarNetwork) ?? process.env.STELLAR_NETWORK,
     sorobanRpcUrl: /** @type {string} */ (options.sorobanRpcUrl) ?? process.env.SOROBAN_RPC_URL,
@@ -140,12 +144,11 @@ export function createApp(options = {}) {
     'CAMPAIGN_CONTRACT_ID',
   );
   const fetchImpl = /** @type {typeof fetch} */ (options.fetchImpl) ?? globalThis.fetch;
-  const allowedOrigins = parseAllowedOrigins(corsAllowedOrigins);
+  const allowedOrigins = parseAllowedOrigins(corsAllowedOriginsRaw);
 
-  const isProduction = process.env.NODE_ENV === 'production';
-  if (isProduction && (allowedOrigins.length === 0 || allowedOrigins.includes('*'))) {
+  if (isProduction && allowedOrigins.includes('*')) {
     throw new Error(
-      'CORS_ALLOWED_ORIGINS must be explicitly configured in production. Wildcard origins are not permitted.',
+      'Wildcard origins are not permitted in production.',
     );
   }
 

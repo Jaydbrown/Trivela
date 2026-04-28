@@ -43,7 +43,7 @@ use soroban_sdk::{
 pub enum Error {
     Unauthorized = 100,
     OutsideTimeWindow = 101,
-    CapacityReached = 102,
+    CapReached = 102,
     CampaignInactive = 103,
     NotInAllowlist = 104,
     UnsupportedMigration = 105,
@@ -306,7 +306,7 @@ impl CampaignContract {
                 .get(&PARTICIPANT_COUNT)
                 .unwrap_or(0);
             if count >= max_cap {
-                return Err(Error::CapacityReached);
+                return Err(Error::CapReached);
             }
         }
 

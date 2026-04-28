@@ -11,8 +11,9 @@
 //! 1. After every operation the in-memory balance shadow matches the contract's
 //!    reported balance for every user.
 //! 2. `total_claimed` equals the running sum of every successful claim.
-//! 3. Overflow in `credit` is handled without panicking (returns an error).
-//! 4. Under-balance in `claim` is handled without panicking (returns an error).
+//! 3. `sum(balances) + total_claimed == total_successful_credits`.
+//! 4. Overflow in `credit` is handled without panicking (returns an error).
+//! 5. Under-balance in `claim` is handled without panicking (returns an error).
 
 #![no_main]
 
@@ -50,6 +51,7 @@ fn run(data: &[u8]) {
     // Shadow state tracked by the harness.
     let mut expected_balances = [0u64; NUM_USERS];
     let mut expected_total_claimed: u64 = 0;
+    let mut expected_total_credited: u64 = 0;
 
     let mut i = 0;
     while i + 9 < data.len() {
@@ -77,6 +79,9 @@ fn run(data: &[u8]) {
                     "credit: returned balance does not match expected"
                 );
                 expected_balances[user_idx] = new_bal;
+                expected_total_credited = expected_total_credited
+                    .checked_add(amount)
+                    .expect("successful credit total overflowed harness accounting");
             }
             // On Err(_) or Ok(Err(_)): overflow / limit exceeded — balance unchanged.
         } else {
@@ -103,6 +108,12 @@ fn run(data: &[u8]) {
                 "balance invariant violated for user {idx} after op {i}"
             );
         }
+        let shadow_balance_sum: u64 = expected_balances.iter().copied().sum();
+        assert_eq!(
+            shadow_balance_sum + expected_total_claimed,
+            expected_total_credited,
+            "accounting invariant violated after op {i}"
+        );
     }
 
     // ── post-sequence invariant ────────────────────────────────────────────

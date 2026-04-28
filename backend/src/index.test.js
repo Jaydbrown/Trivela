@@ -781,14 +781,22 @@ test('CORS rejects requests from non-allowed origins', async () => {
   }
 });
 
-test('createApp throws in production when CORS is not configured', () => {
+test('createApp defaults to deny-by-default CORS in production when not configured', async () => {
   const originalEnv = process.env.NODE_ENV;
   try {
     process.env.NODE_ENV = 'production';
-    assert.throws(
-      () => createApp({ corsAllowedOrigins: '' }),
-      /CORS_ALLOWED_ORIGINS must be explicitly configured in production/,
-    );
+    const { server, baseUrl } = await startTestServer({ corsAllowedOrigins: '' });
+    try {
+      const deniedResp = await fetch(`${baseUrl}/api/v1/campaigns`, {
+        headers: {
+          Origin: 'https://unknown-origin.example',
+        },
+      });
+      assert.equal(deniedResp.status, 200);
+      assert.strictEqual(deniedResp.headers.get('access-control-allow-origin'), null);
+    } finally {
+      await stopTestServer(server);
+    }
 
     assert.throws(
       () => createApp({ corsAllowedOrigins: '*' }),

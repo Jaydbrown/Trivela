@@ -248,6 +248,25 @@ fn test_credit_respects_max_per_call() {
     assert_eq!(client.balance(&user), 0);
 }
 
+#[test]
+fn test_paused_blocks_credit_and_claim_with_clear_error() {
+    let env = Env::default();
+    let contract_id = env.register_contract(None, RewardsContract);
+    let client = RewardsContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let user = Address::generate(&env);
+    client.initialize(&admin, &symbol_short!("Trivela"), &symbol_short!("TVL"));
+
+    env.mock_all_auths();
+    client.set_paused(&admin, &true);
+
+    assert_eq!(
+        client.try_credit(&admin, &user, &10),
+        Err(Ok(Error::ContractPaused))
+    );
+    assert_eq!(client.try_claim(&user, &1), Err(Ok(Error::ContractPaused)));
+}
+
 // Symbol mirrors `REGISTER_EVENT` in the campaign contract; redeclared here
 // because that constant is module-private.
 const CAMPAIGN_REGISTER_EVENT: soroban_sdk::Symbol = symbol_short!("register");

@@ -234,6 +234,7 @@ impl RewardsContract {
         recipients: Vec<(Address, u64)>,
     ) -> Result<(), Error> {
         from.require_auth();
+        ensure_not_paused(&env)?;
 
         let mut staged = Vec::new(&env);
 

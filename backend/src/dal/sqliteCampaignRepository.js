@@ -32,6 +32,7 @@ function rowToCampaign(row) {
     endDate: row.end_date ?? null,
     hidden: row.hidden === 1,
     hiddenReason: row.hidden_reason ?? null,
+    contractId: row.contract_id ?? null,
     createdAt: row.created_at,
     updatedAt: row.updated_at ?? row.created_at,
   };
@@ -147,6 +148,7 @@ export function createSqliteCampaignRepository({
       endDate: 'end_date',
       hidden: 'hidden',
       hiddenReason: 'hidden_reason',
+      contractId: 'contract_id',
     };
     const booleanFields = new Set(['active', 'featured', 'hidden']);
     const sets = [];

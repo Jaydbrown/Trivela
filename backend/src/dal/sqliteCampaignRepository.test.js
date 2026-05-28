@@ -51,6 +51,41 @@ test('sqlite campaign repository generates slug from name', async () => {
   assert.equal(created.slug, 'my-awesome-campaign');
 });
 
+test('sqlite campaign repository stores and retrieves contractId', async () => {
+  const repository = await setupTestRepository();
+
+  const contractId = 'CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA';
+  const created = repository.create({
+    name: 'On-Chain Campaign',
+    description: 'Campaign with contract',
+    rewardPerAction: 10,
+    contractId,
+  });
+
+  assert.equal(created.contractId, contractId);
+
+  const retrieved = repository.getById(created.id);
+  assert.equal(retrieved.contractId, contractId);
+});
+
+test('sqlite campaign repository updates contractId', async () => {
+  const repository = await setupTestRepository();
+
+  const created = repository.create({
+    name: 'Campaign',
+    description: 'Test',
+    rewardPerAction: 10,
+    contractId: null,
+  });
+
+  assert.equal(created.contractId, null);
+
+  const contractId = 'CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA';
+  const updated = repository.update(created.id, { contractId });
+
+  assert.equal(updated.contractId, contractId);
+});
+
 test('sqlite campaign repository allows explicit slug', async () => {
   const repository = await setupTestRepository();
 

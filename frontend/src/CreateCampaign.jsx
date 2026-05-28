@@ -1,10 +1,13 @@
 import { useId, useState } from 'react';
-import { apiUrl } from './config';
+import { useNavigate } from 'react-router-dom';
+import { apiUrl, getStellarNetwork } from './config';
 import { logSafeEvent } from './lib/safeAnalytics';
+import { initializeCampaignContract, getWalletAddress, isWalletConnected } from './stellar';
+import TransactionStatus from './components/TransactionStatus';
 
 /**
  * CreateCampaign — form that submits a new campaign to POST /api/campaigns
- * and triggers a refresh of the campaign list on success.
+ * and optionally deploys it on-chain with contract initialization.
  *
  * Props
  * ─────
@@ -12,20 +15,27 @@ import { logSafeEvent } from './lib/safeAnalytics';
  *                                       so the parent can refetch the list.
  */
 export default function CreateCampaign({ onCampaignCreated, campaigns = [] }) {
+  const navigate = useNavigate();
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
   const [rewardPerAction, setRewardPerAction] = useState('');
   const [selectedId, setSelectedId] = useState('');
   const [apiKeyInput, setApiKeyInput] = useState('');
+  const [deployOnChain, setDeployOnChain] = useState(false);
+  const [contractIdInput, setContractIdInput] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
+  const [deploymentStatus, setDeploymentStatus] = useState('');
+  const [txHash, setTxHash] = useState('');
   const headingId = useId();
   const nameId = useId();
   const descId = useId();
   const rewardId = useId();
   const apiKeyId = useId();
   const editSelectId = useId();
+  const deployToggleId = useId();
+  const contractIdInputId = useId();
   const isEditMode = selectedId !== '';
   const isBrowser = typeof window !== 'undefined';
   const storedApiKey = isBrowser
@@ -42,11 +52,13 @@ export default function CreateCampaign({ onCampaignCreated, campaigns = [] }) {
       setName('');
       setDescription('');
       setRewardPerAction('');
+      setContractIdInput('');
       return;
     }
     setName(campaign.name || '');
     setDescription(campaign.description || '');
     setRewardPerAction(String(campaign.rewardPerAction ?? ''));
+    setContractIdInput(campaign.contractId || '');
   };
 
   const handleSubmit = async (event) => {
@@ -60,11 +72,16 @@ export default function CreateCampaign({ onCampaignCreated, campaigns = [] }) {
     setIsSubmitting(true);
     setError('');
     setSuccess('');
+    setDeploymentStatus('');
+    setTxHash('');
 
     try {
       if (isBrowser && apiKeyInput) {
         window.sessionStorage.setItem('trivela_admin_api_key', apiKeyInput);
       }
+
+      /* Step 1: Create off-chain campaign record */
+      setDeploymentStatus('Creating campaign record...');
       const endpoint = isEditMode
         ? apiUrl(`/api/v1/campaigns/${selectedId}`)
         : apiUrl('/api/v1/campaigns');
@@ -79,6 +96,7 @@ export default function CreateCampaign({ onCampaignCreated, campaigns = [] }) {
           name: name.trim(),
           description: description.trim(),
           rewardPerAction: Number(rewardPerAction) || 0,
+          contractId: contractIdInput.trim() || null,
         }),
       });
 
@@ -87,25 +105,80 @@ export default function CreateCampaign({ onCampaignCreated, campaigns = [] }) {
         throw new Error(body.error || `API returned ${response.status}`);
       }
 
-      const campaign = await response.json();
+      let campaign = await response.json();
+
+      /* Step 2: Deploy on-chain if enabled and contract ID provided */
+      if (deployOnChain && contractIdInput.trim() && !isEditMode) {
+        setDeploymentStatus('Checking wallet connection...');
+        const walletConnected = await isWalletConnected();
+        if (!walletConnected) {
+          throw new Error(
+            'Wallet not connected. Please connect your wallet to deploy on-chain.',
+          );
+        }
+
+        const walletAddress = await getWalletAddress();
+        setDeploymentStatus('Initializing contract on-chain...');
+
+        const { hash } = await initializeCampaignContract(walletAddress, contractIdInput.trim());
+        setTxHash(hash);
+        setDeploymentStatus('Contract initialized successfully!');
+
+        /* Step 3: Update campaign record with deployment confirmation */
+        const updateResponse = await fetch(apiUrl(`/api/v1/campaigns/${campaign.id}`), {
+          method: 'PUT',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-api-key': effectiveApiKey,
+          },
+          body: JSON.stringify({
+            contractId: contractIdInput.trim(),
+          }),
+        });
+
+        if (updateResponse.ok) {
+          campaign = await updateResponse.json();
+        }
+
+        logSafeEvent('admin_campaign_deployed', {
+          campaignId: campaign.id,
+          contractId: contractIdInput.trim(),
+          txHash: hash,
+        });
+      }
+
       setSuccess(
         isEditMode
           ? `Campaign "${campaign.name}" updated successfully.`
-          : `Campaign "${campaign.name}" created successfully.`,
+          : deployOnChain && contractIdInput.trim()
+            ? `Campaign "${campaign.name}" created and deployed on-chain successfully!`
+            : `Campaign "${campaign.name}" created successfully.`,
       );
+
       logSafeEvent(isEditMode ? 'admin_campaign_updated' : 'admin_campaign_created', {
         campaignId: campaign.id,
       });
+
       setName('');
       setDescription('');
       setRewardPerAction('');
+      setContractIdInput('');
       setSelectedId('');
+      setDeployOnChain(false);
 
       if (onCampaignCreated) {
         onCampaignCreated(campaign);
       }
+
+      // Redirect to campaign detail page after successful deployment
+      if (deployOnChain && contractIdInput.trim() && !isEditMode) {
+        setTimeout(() => {
+          navigate(`/campaigns/${campaign.id}`);
+        }, 2000);
+      }
     } catch (err) {
       setError(err.message || 'Failed to create campaign.');
+      setDeploymentStatus('');
     } finally {
       setIsSubmitting(false);
     }
@@ -204,6 +277,43 @@ export default function CreateCampaign({ onCampaignCreated, campaigns = [] }) {
           />
         </div>
 
+        <div className="create-campaign-field">
+          <label htmlFor={contractIdInputId} className="create-campaign-label">
+            Contract ID (optional)
+          </label>
+          <input
+            id={contractIdInputId}
+            type="text"
+            className="create-campaign-input"
+            placeholder="C... (Stellar contract address)"
+            value={contractIdInput}
+            disabled={isSubmitting}
+            onChange={(e) => setContractIdInput(e.target.value)}
+          />
+          <small className="create-campaign-hint">
+            Enter a deployed campaign contract ID to link this campaign to on-chain state.
+          </small>
+        </div>
+
+        {!isEditMode && contractIdInput.trim() && (
+          <div className="create-campaign-field">
+            <label className="create-campaign-checkbox-label">
+              <input
+                id={deployToggleId}
+                type="checkbox"
+                checked={deployOnChain}
+                disabled={isSubmitting}
+                onChange={(e) => setDeployOnChain(e.target.checked)}
+              />
+              <span>Initialize contract on-chain after creation</span>
+            </label>
+            <small className="create-campaign-hint">
+              When enabled, the contract will be initialized with your wallet as admin. Requires
+              wallet connection.
+            </small>
+          </div>
+        )}
+
         <button
           type="submit"
           className="btn btn-primary btn-button"
@@ -218,6 +328,14 @@ export default function CreateCampaign({ onCampaignCreated, campaigns = [] }) {
               : 'Create campaign'}
         </button>
       </form>
+
+      {deploymentStatus && (
+        <p className="create-campaign-status" role="status" aria-live="polite">
+          {deploymentStatus}
+        </p>
+      )}
+
+      {txHash && <TransactionStatus hash={txHash} network={getStellarNetwork()} status="Success" />}
 
       {success && (
         <p className="create-campaign-success" role="status" aria-live="polite">

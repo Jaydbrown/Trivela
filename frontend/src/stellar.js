@@ -7,6 +7,7 @@
 
 import {
   Address,
+  Contract,
   TransactionBuilder,
   BASE_FEE,
   scValToNative,
@@ -353,4 +354,67 @@ export async function submitRegisterTransaction(walletAddress) {
   const wasNew = getResult.returnValue ? scValToNative(getResult.returnValue) : true;
 
   return { hash: sendResult.hash, alreadyRegistered: !wasNew };
+}
+
+/**
+ * Initialize a campaign contract with the admin address.
+ *
+ * This is a simplified version that assumes the contract is already deployed
+ * and just needs to be initialized with an admin.
+ *
+ * For full deployment (WASM upload + contract creation), use backend deployment
+ * service or stellar-cli.
+ *
+ * Returns `{ hash: string }`.
+ *
+ * @param {string} walletAddress - The admin wallet address
+ * @param {string} contractId - The deployed contract ID
+ */
+export async function initializeCampaignContract(walletAddress, contractId) {
+  const contract = new Contract(contractId);
+  const server = createSorobanServer();
+  const sourceAccount = await server.getAccount(walletAddress);
+
+  /* Build initialization transaction */
+  const tx = new TransactionBuilder(sourceAccount, {
+    fee: BASE_FEE,
+    networkPassphrase: getNetworkPassphrase(),
+  })
+    .addOperation(contract.call('initialize', nativeToScVal(Address.fromString(walletAddress))))
+    .setTimeout(30)
+    .build();
+
+  /* Prepare & sign */
+  const preparedTx = await server.prepareTransaction(tx);
+  const signedTxXdr = await walletManager.signTransaction(preparedTx.toXDR(), {
+    networkPassphrase: getNetworkPassphrase(),
+    address: walletAddress,
+  });
+  const signedTx = TransactionBuilder.fromXDR(signedTxXdr, getNetworkPassphrase());
+
+  /* Submit */
+  const sendResult = await server.sendTransaction(signedTx);
+  if (sendResult.status === 'ERROR') {
+    throw new Error(sendResult.errorResult?.toString() || 'Contract initialization failed.');
+  }
+
+  /* Poll until finalized */
+  let getResult;
+  for (let i = 0; i < TX_POLL_MAX_ATTEMPTS; i++) {
+    // eslint-disable-next-line no-await-in-loop
+    getResult = await server.getTransaction(sendResult.hash);
+    if (getResult.status !== 'NOT_FOUND') break;
+    // eslint-disable-next-line no-await-in-loop
+    await new Promise((r) => setTimeout(r, TX_POLL_INTERVAL_MS));
+  }
+
+  if (!getResult || getResult.status === 'NOT_FOUND') {
+    throw new Error('Initialization transaction could not be confirmed in time.');
+  }
+
+  if (getResult.status === 'FAILED') {
+    throw new Error('Initialization transaction failed on-chain.');
+  }
+
+  return { hash: sendResult.hash };
 }

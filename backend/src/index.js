@@ -532,6 +532,7 @@ export async function createApp(options = {}) {
         referralBonusPoints: referralBonusPoints ?? 0,
         startDate: startDate ?? null,
         endDate: endDate ?? null,
+        contractId: contractId ?? null,
       });
       recordAuditEntry(req, {
         action: 'create',
@@ -588,6 +589,7 @@ export async function createApp(options = {}) {
     if (endDate !== undefined) updateFields.endDate = endDate;
     if (hidden !== undefined) updateFields.hidden = hidden;
     if (hiddenReason !== undefined) updateFields.hiddenReason = hiddenReason;
+    if (contractId !== undefined) updateFields.contractId = contractId;
 
     const before = campaignRepository.getById(req.params.id);
     if (!before) {

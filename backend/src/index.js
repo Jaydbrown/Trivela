@@ -5,6 +5,7 @@
 
 import cors from 'cors';
 import express from 'express';
+import compression from 'compression';
 import { pathToFileURL } from 'node:url';
 import Redis from 'ioredis';
 import createApiKeyAuth from './middleware/apiKeyAuth.js';
@@ -242,6 +243,7 @@ export async function createApp(options = {}) {
   });
 
   app.use(requestId);
+  app.use(compression({ threshold: 1024 }));
   app.use(cors(createCorsOptions(allowedOrigins)));
   app.use(securityHeaders);
   app.use(requestLogger);

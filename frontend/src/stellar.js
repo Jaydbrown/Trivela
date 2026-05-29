@@ -22,7 +22,10 @@ import {
   getRewardsContract,
   getStellarNetwork,
   getRewardsContractId,
+  getSorobanRpcUrl,
 } from './config';
+import { Client as RewardsClient } from './contracts/rewards';
+import { Client as CampaignClient } from './contracts/campaign';
 import { ERROR_MESSAGES, getErrorMessage } from './lib/errorMapping';
 import { walletManager } from './lib/wallet/index.js';
 
@@ -152,129 +155,71 @@ export async function fetchWalletBalance(walletAddress) {
  * Simulate a read-only `balance(user)` call and return the raw result.
  */
 export async function fetchRewardsBalance(walletAddress) {
-  const contract = getRewardsContract();
-  if (!contract) {
+  const contractId = getRewardsContractId();
+  if (!contractId) {
     throw new Error('Set VITE_REWARDS_CONTRACT_ID to load on-chain points.');
   }
 
-  const server = createSorobanServer();
-  const sourceAccount = await server.getAccount(walletAddress);
-
-  const transaction = new TransactionBuilder(sourceAccount, {
-    fee: BASE_FEE,
+  const client = new RewardsClient({
+    rpcUrl: getSorobanRpcUrl(),
     networkPassphrase: getNetworkPassphrase(),
-  })
-    .addOperation(contract.call('balance', nativeToScVal(Address.fromString(walletAddress))))
-    .setTimeout(30)
-    .build();
+    contractId,
+  });
 
-  const simulation = await server.simulateTransaction(transaction);
-
-  if (simulation.error) throw new Error(simulation.error);
-  if (!simulation.result) {
-    throw new Error('Soroban RPC returned no result for rewards balance.');
-  }
-
-  return scValToNative(simulation.result.retval);
+  const tx = await client.balance({ user: walletAddress });
+  return await tx.simulate();
 }
 
 /* ---------- contract write helpers ---------- */
 
-const TX_POLL_INTERVAL_MS = 1500;
-const TX_POLL_MAX_ATTEMPTS = 40;
-
 export async function submitClaimTransaction(walletAddress, amount) {
-  const contract = getRewardsContract();
-  if (!contract) {
+  const contractId = getRewardsContractId();
+  if (!contractId) {
     throw new Error('Set VITE_REWARDS_CONTRACT_ID before claiming rewards.');
   }
 
-  const server = createSorobanServer();
-  const sourceAccount = await server.getAccount(walletAddress);
-
-  /* 1. Build the transaction */
-  const tx = new TransactionBuilder(sourceAccount, {
-    fee: BASE_FEE,
+  const client = new RewardsClient({
+    rpcUrl: getSorobanRpcUrl(),
     networkPassphrase: getNetworkPassphrase(),
-  })
-    .addOperation(
-      contract.call(
-        'claim',
-        nativeToScVal(Address.fromString(walletAddress)),
-        nativeToScVal(amount, { type: 'u64' }),
-      ),
-    )
-    .setTimeout(30)
-    .build();
-
-  /* 2. Simulate & prepare (assembles auth + resources) */
-  const preparedTx = await server.prepareTransaction(tx);
-
-  /* 3. Sign with wallet */
-  const signedTxXdr = await walletManager.signTransaction(preparedTx.toXDR(), {
-    networkPassphrase: getNetworkPassphrase(),
-    address: walletAddress,
+    contractId,
+    publicKey: walletAddress,
+    signTransaction: async (txXdr) => {
+      const signedTxXdr = await walletManager.signTransaction(txXdr, {
+        networkPassphrase: getNetworkPassphrase(),
+        address: walletAddress,
+      });
+      return { signedTxXdr };
+    },
   });
 
-  /* 4. Re-construct the signed transaction */
-  const signedTx = TransactionBuilder.fromXDR(signedTxXdr, getNetworkPassphrase());
+  const tx = await client.claim({
+    user: walletAddress,
+    amount: BigInt(amount),
+  });
 
-  /* 5. Submit */
-  const sendResult = await server.sendTransaction(signedTx);
-  if (sendResult.status === 'ERROR') {
-    throw new Error(sendResult.errorResult?.toString() || 'Transaction submission failed.');
-  }
+  const newBalanceVal = await tx.signAndSend();
+  const hash = tx.signed.hash().toString('hex');
+  const newBalance = formatPoints(newBalanceVal);
 
-  /* 6. Poll until finalised */
-  let getResult;
-  for (let i = 0; i < TX_POLL_MAX_ATTEMPTS; i++) {
-    // eslint-disable-next-line no-await-in-loop
-    getResult = await server.getTransaction(sendResult.hash);
-    if (getResult.status !== 'NOT_FOUND') break;
-    // eslint-disable-next-line no-await-in-loop
-    await new Promise((r) => setTimeout(r, TX_POLL_INTERVAL_MS));
-  }
-
-  if (!getResult || getResult.status === 'NOT_FOUND') {
-    throw new Error('Transaction was submitted but could not be confirmed in time.');
-  }
-
-  if (getResult.status === 'FAILED') {
-    throw new Error('Transaction failed on-chain. You may not have enough points.');
-  }
-
-  const newBalance = getResult.returnValue
-    ? formatPoints(scValToNative(getResult.returnValue))
-    : null;
-
-  return { hash: sendResult.hash, newBalance };
+  return { hash, newBalance };
 }
 
 /* ---------- campaign contract helpers ---------- */
 
 export async function checkParticipantStatus(walletAddress) {
-  const contract = getCampaignContract();
-  if (!contract) {
+  const contractId = getCampaignContractId();
+  if (!contractId) {
     throw new Error('Set VITE_CAMPAIGN_CONTRACT_ID to check participant status.');
   }
 
-  const server = createSorobanServer();
-  const sourceAccount = await server.getAccount(walletAddress);
-
-  const tx = new TransactionBuilder(sourceAccount, {
-    fee: BASE_FEE,
+  const client = new CampaignClient({
+    rpcUrl: getSorobanRpcUrl(),
     networkPassphrase: getNetworkPassphrase(),
-  })
-    .addOperation(contract.call('is_participant', nativeToScVal(Address.fromString(walletAddress))))
-    .setTimeout(30)
-    .build();
+    contractId,
+  });
 
-  const simulation = await server.simulateTransaction(tx);
-
-  if (simulation.error) throw new Error(simulation.error);
-  if (!simulation.result) return false;
-
-  return scValToNative(simulation.result.retval);
+  const tx = await client.is_participant({ participant: walletAddress });
+  return await tx.simulate();
 }
 
 /**
@@ -286,74 +231,38 @@ export async function checkParticipantStatus(walletAddress) {
  * - `alreadyRegistered === true` means they were already registered (contract returned false).
  */
 export async function submitRegisterTransaction(walletAddress) {
-  const contract = getCampaignContract();
-  if (!contract) {
+  const contractId = getCampaignContractId();
+  if (!contractId) {
     throw new Error('Set VITE_CAMPAIGN_CONTRACT_ID before registering.');
   }
 
-  const server = createSorobanServer();
-  const sourceAccount = await server.getAccount(walletAddress);
+  const client = new CampaignClient({
+    rpcUrl: getSorobanRpcUrl(),
+    networkPassphrase: getNetworkPassphrase(),
+    contractId,
+    publicKey: walletAddress,
+    signTransaction: async (txXdr) => {
+      const signedTxXdr = await walletManager.signTransaction(txXdr, {
+        networkPassphrase: getNetworkPassphrase(),
+        address: walletAddress,
+      });
+      return { signedTxXdr };
+    },
+  });
 
-  // For open registration, pass empty leaf and proof
   const emptyLeaf = new Uint8Array(32); // 32 bytes of zeros
   const emptyProof = []; // Empty proof array
 
-  /* 1. Build */
-  const tx = new TransactionBuilder(sourceAccount, {
-    fee: BASE_FEE,
-    networkPassphrase: getNetworkPassphrase(),
-  })
-    .addOperation(
-      contract.call(
-        'register',
-        nativeToScVal(Address.fromString(walletAddress)),
-        nativeToScVal(emptyLeaf),
-        nativeToScVal(emptyProof),
-      ),
-    )
-    .setTimeout(30)
-    .build();
-
-  /* 2. Simulate & prepare */
-  const preparedTx = await server.prepareTransaction(tx);
-
-  /* 3. Sign with wallet */
-  const signedTxXdr = await walletManager.signTransaction(preparedTx.toXDR(), {
-    networkPassphrase: getNetworkPassphrase(),
-    address: walletAddress,
+  const tx = await client.register({
+    participant: walletAddress,
+    leaf: emptyLeaf,
+    proof: emptyProof,
   });
 
-  /* 4. Re-construct signed transaction */
-  const signedTx = TransactionBuilder.fromXDR(signedTxXdr, getNetworkPassphrase());
+  const wasNew = await tx.signAndSend();
+  const hash = tx.signed.hash().toString('hex');
 
-  /* 5. Submit */
-  const sendResult = await server.sendTransaction(signedTx);
-  if (sendResult.status === 'ERROR') {
-    throw new Error(sendResult.errorResult?.toString() || 'Registration transaction failed.');
-  }
-
-  /* 6. Poll until finalised */
-  let getResult;
-  for (let i = 0; i < TX_POLL_MAX_ATTEMPTS; i++) {
-    // eslint-disable-next-line no-await-in-loop
-    getResult = await server.getTransaction(sendResult.hash);
-    if (getResult.status !== 'NOT_FOUND') break;
-    // eslint-disable-next-line no-await-in-loop
-    await new Promise((r) => setTimeout(r, TX_POLL_INTERVAL_MS));
-  }
-
-  if (!getResult || getResult.status === 'NOT_FOUND') {
-    throw new Error('Registration transaction was submitted but could not be confirmed in time.');
-  }
-
-  if (getResult.status === 'FAILED') {
-    throw new Error('Registration transaction failed on-chain.');
-  }
-
-  // Contract returns true for a fresh registration, false if already registered.
-  const wasNew = getResult.returnValue ? scValToNative(getResult.returnValue) : true;
-
-  return { hash: sendResult.hash, alreadyRegistered: !wasNew };
+  return { hash, alreadyRegistered: !wasNew };
 }
 
 /**
@@ -371,50 +280,23 @@ export async function submitRegisterTransaction(walletAddress) {
  * @param {string} contractId - The deployed contract ID
  */
 export async function initializeCampaignContract(walletAddress, contractId) {
-  const contract = new Contract(contractId);
-  const server = createSorobanServer();
-  const sourceAccount = await server.getAccount(walletAddress);
-
-  /* Build initialization transaction */
-  const tx = new TransactionBuilder(sourceAccount, {
-    fee: BASE_FEE,
+  const client = new CampaignClient({
+    rpcUrl: getSorobanRpcUrl(),
     networkPassphrase: getNetworkPassphrase(),
-  })
-    .addOperation(contract.call('initialize', nativeToScVal(Address.fromString(walletAddress))))
-    .setTimeout(30)
-    .build();
-
-  /* Prepare & sign */
-  const preparedTx = await server.prepareTransaction(tx);
-  const signedTxXdr = await walletManager.signTransaction(preparedTx.toXDR(), {
-    networkPassphrase: getNetworkPassphrase(),
-    address: walletAddress,
+    contractId,
+    publicKey: walletAddress,
+    signTransaction: async (txXdr) => {
+      const signedTxXdr = await walletManager.signTransaction(txXdr, {
+        networkPassphrase: getNetworkPassphrase(),
+        address: walletAddress,
+      });
+      return { signedTxXdr };
+    },
   });
-  const signedTx = TransactionBuilder.fromXDR(signedTxXdr, getNetworkPassphrase());
 
-  /* Submit */
-  const sendResult = await server.sendTransaction(signedTx);
-  if (sendResult.status === 'ERROR') {
-    throw new Error(sendResult.errorResult?.toString() || 'Contract initialization failed.');
-  }
+  const tx = await client.initialize({ admin: walletAddress });
+  await tx.signAndSend();
+  const hash = tx.signed.hash().toString('hex');
 
-  /* Poll until finalized */
-  let getResult;
-  for (let i = 0; i < TX_POLL_MAX_ATTEMPTS; i++) {
-    // eslint-disable-next-line no-await-in-loop
-    getResult = await server.getTransaction(sendResult.hash);
-    if (getResult.status !== 'NOT_FOUND') break;
-    // eslint-disable-next-line no-await-in-loop
-    await new Promise((r) => setTimeout(r, TX_POLL_INTERVAL_MS));
-  }
-
-  if (!getResult || getResult.status === 'NOT_FOUND') {
-    throw new Error('Initialization transaction could not be confirmed in time.');
-  }
-
-  if (getResult.status === 'FAILED') {
-    throw new Error('Initialization transaction failed on-chain.');
-  }
-
-  return { hash: sendResult.hash };
+  return { hash };
 }

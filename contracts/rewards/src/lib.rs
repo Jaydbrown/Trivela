@@ -50,6 +50,7 @@ const MAX_CREDIT_PER_CALL: Symbol = symbol_short!("mxcredit");
 const SCHEMA_VERSION: Symbol = symbol_short!("schema_v");
 const CURRENT_SCHEMA_VERSION: u32 = 1;
 const CAMPAIGN_MULTIPLIER: Symbol = symbol_short!("mult");
+const TIERS: Symbol = symbol_short!("tiers");
 const BPS_DENOMINATOR: u128 = 10_000;
 
 #[contract]
@@ -327,7 +328,104 @@ impl RewardsContract {
     pub fn is_paused(env: Env) -> bool {
         env.storage().instance().get(&PAUSED).unwrap_or(false)
     }
+
+    /// Configure tiered reward distribution for a campaign (admin only).
+    pub fn set_tiers(
+        env: Env,
+        admin: Address,
+        campaign_id: u64,
+        tiers: Vec<(u64, u64)>,
+    ) -> Result<(), Error> {
+        require_admin(&env, &admin)?;
+
+        let sorted = sort_tiers(&env, tiers);
+        env.storage().instance().set(&(TIERS, campaign_id), &sorted);
+
+        env.events().publish((Symbol::new(&env, "set_tiers"), campaign_id), ());
+        env.storage().instance().extend_ttl(50, 100);
+        Ok(())
+    }
+
+    /// Clear configured tiers for a campaign (admin only).
+    pub fn clear_tiers(env: Env, admin: Address, campaign_id: u64) -> Result<(), Error> {
+        require_admin(&env, &admin)?;
+
+        env.storage().instance().remove(&(TIERS, campaign_id));
+
+        env.events().publish((Symbol::new(&env, "clear_tiers"), campaign_id), ());
+        env.storage().instance().extend_ttl(50, 100);
+        Ok(())
+    }
+
+    /// Get points reward for a given rank under a campaign.
+    pub fn get_tier_for_rank(env: Env, rank: u64, campaign_id: u64) -> u64 {
+        let tiers_opt: Option<Vec<(u64, u64)>> = env.storage().instance().get(&(TIERS, campaign_id));
+        if let Some(tiers) = tiers_opt {
+            for (max_rank, points) in tiers.iter() {
+                if max_rank > 0 {
+                    if rank <= max_rank {
+                        return points;
+                    }
+                } else if max_rank == 0 {
+                    return points;
+                }
+            }
+        }
+        0
+    }
+
+    /// Credit points to a user based on their rank.
+    pub fn credit_by_rank(
+        env: Env,
+        from: Address,
+        user: Address,
+        rank: u64,
+        campaign_id: u64,
+    ) -> Result<u64, Error> {
+        from.require_auth();
+        ensure_not_paused(&env)?;
+
+        let points = Self::get_tier_for_rank(env.clone(), rank, campaign_id);
+        let new_balance = Self::credit(env.clone(), from, user.clone(), points)?;
+
+        env.events().publish(
+            (Symbol::new(&env, "tier_credit"), user),
+            (rank, points),
+        );
+
+        Ok(new_balance)
+    }
 }
+
+fn sort_tiers(env: &Env, tiers: Vec<(u64, u64)>) -> Vec<(u64, u64)> {
+    let mut sorted = tiers.clone();
+    let len = sorted.len();
+    if len <= 1 {
+        return sorted;
+    }
+
+    for i in 0..len {
+        for j in 0..len - 1 - i {
+            let (rank_a, points_a) = sorted.get(j).unwrap();
+            let (rank_b, points_b) = sorted.get(j + 1).unwrap();
+
+            let swap = if rank_a == 0 && rank_b != 0 {
+                true
+            } else if rank_a != 0 && rank_b != 0 && rank_a > rank_b {
+                true
+            } else {
+                false
+            };
+
+            if swap {
+                sorted.set(j, (rank_b, points_b));
+                sorted.set(j + 1, (rank_a, points_a));
+            }
+        }
+    }
+    sorted
+}
+
 
 #[cfg(test)]
 mod test;

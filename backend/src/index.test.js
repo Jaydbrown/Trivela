@@ -1080,3 +1080,50 @@ test('GET /api/v1/explorer returns correct URL for mainnet', async () => {
     await stopTestServer(server);
   }
 });
+
+test('API response compression is applied to payloads larger than 1KB', async () => {
+  const largeCampaign = {
+    name: 'A'.repeat(600),
+    description: 'B'.repeat(600),
+    active: true,
+    rewardPerAction: 10,
+    createdAt: new Date().toISOString(),
+  };
+  const { server, baseUrl } = await startTestServer({ campaigns: [largeCampaign] });
+
+  try {
+    const response = await fetch(`${baseUrl}/api/v1/campaigns`, {
+      headers: {
+        'Accept-Encoding': 'gzip',
+      },
+    });
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get('content-encoding'), 'gzip');
+  } finally {
+    await stopTestServer(server);
+  }
+});
+
+test('API response compression is NOT applied to payloads smaller than 1KB', async () => {
+  const smallCampaign = {
+    name: 'Small',
+    description: 'Short',
+    active: true,
+    rewardPerAction: 10,
+    createdAt: new Date().toISOString(),
+  };
+  const { server, baseUrl } = await startTestServer({ campaigns: [smallCampaign] });
+
+  try {
+    const response = await fetch(`${baseUrl}/api/v1/campaigns`, {
+      headers: {
+        'Accept-Encoding': 'gzip',
+      },
+    });
+    assert.equal(response.status, 200);
+    assert.strictEqual(response.headers.get('content-encoding'), null);
+  } finally {
+    await stopTestServer(server);
+  }
+});
+

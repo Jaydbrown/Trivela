@@ -327,6 +327,42 @@ impl CampaignContract {
         Ok(true)
     }
 
+    /// Deregister a participant.
+    ///
+    /// Checks liveness/window: if end_time is u64::MAX, checks if campaign is active;
+    /// otherwise, checks if current timestamp <= end_time.
+    pub fn deregister(env: Env, participant: Address) -> Result<bool, Error> {
+        participant.require_auth();
+
+        let end_time: u64 = env.storage().instance().get(&END_TIME).unwrap_or(u64::MAX);
+        if end_time != u64::MAX {
+            let now = env.ledger().timestamp();
+            if now > end_time {
+                return Err(Error::OutsideTimeWindow);
+            }
+        } else {
+            let active: bool = env.storage().instance().get(&CAMPAIGN_ACTIVE).unwrap_or(false);
+            if !active {
+                return Err(Error::CampaignInactive);
+            }
+        }
+
+        Ok(do_deregister(&env, participant))
+    }
+
+    /// Deregister a participant by the admin.
+    ///
+    /// Bypasses time window and liveness checks. Requires admin auth and nonce validation.
+    pub fn admin_deregister(
+        env: Env,
+        admin: Address,
+        nonce: u64,
+        participant: Address,
+    ) -> Result<bool, Error> {
+        require_admin_with_nonce(&env, &admin, nonce)?;
+        Ok(do_deregister(&env, participant))
+    }
+
     /// Check if a participant is registered.
     pub fn is_participant(env: Env, participant: Address) -> bool {
         env.storage()
@@ -362,5 +398,24 @@ impl CampaignContract {
     }
 }
 
+fn do_deregister(env: &Env, participant: Address) -> bool {
+    let key = (PARTICIPANT, participant.clone());
+    if !env.storage().instance().get::<_, bool>(&key).unwrap_or(false) {
+        return false;
+    }
+    env.storage().instance().remove(&key);
+    let count: u64 = env.storage().instance().get(&PARTICIPANT_COUNT).unwrap_or(0);
+    if count > 0 {
+        env.storage().instance().set(&PARTICIPANT_COUNT, &(count - 1));
+    }
+    env.events().publish(
+        (Symbol::new(env, "deregister"), participant),
+        (),
+    );
+    env.storage().instance().extend_ttl(50, 100);
+    true
+}
+
 #[cfg(test)]
 mod test;
+

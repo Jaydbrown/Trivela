@@ -567,3 +567,118 @@ fn test_admin_nonce_replay_protection() {
     client.set_active(&admin, &1, &true);
     assert_eq!(client.admin_nonce(), 2);
 }
+
+#[test]
+fn test_deregister_success_and_re_register() {
+    let (env, contract_id, client) = setup();
+    let admin = Address::generate(&env);
+    let participant = Address::generate(&env);
+    client.initialize(&admin);
+
+    env.mock_all_auths();
+    let (leaf, proof) = no_proof_args(&env);
+
+    // Register participant
+    assert!(client.register(&participant, &leaf, &proof));
+    assert!(client.is_participant(&participant));
+    assert_eq!(client.get_participant_count(), 1);
+
+    // Deregister participant
+    assert!(client.deregister(&participant));
+    assert!(!client.is_participant(&participant));
+    assert_eq!(client.get_participant_count(), 0);
+
+    // Check deregister event
+    let deregister_event = Symbol::new(&env, "deregister");
+    assert_eq!(
+        env.events().all(),
+        vec![
+            &env,
+            (
+                contract_id.clone(),
+                vec![&env, deregister_event.into_val(&env), participant.clone().into_val(&env)],
+                ().into_val(&env)
+            )
+        ]
+    );
+
+    // Re-register works
+    assert!(client.register(&participant, &leaf, &proof));
+    assert!(client.is_participant(&participant));
+    assert_eq!(client.get_participant_count(), 1);
+}
+
+#[test]
+fn test_admin_deregister() {
+    let (env, contract_id, client) = setup();
+    let admin = Address::generate(&env);
+    let participant = Address::generate(&env);
+    client.initialize(&admin);
+
+    env.mock_all_auths();
+    let (leaf, proof) = no_proof_args(&env);
+
+    // Register participant
+    assert!(client.register(&participant, &leaf, &proof));
+    assert!(client.is_participant(&participant));
+    assert_eq!(client.get_participant_count(), 1);
+
+    // Admin deregister
+    assert!(client.admin_deregister(&admin, &0, &participant));
+    assert!(!client.is_participant(&participant));
+    assert_eq!(client.get_participant_count(), 0);
+
+    // Check deregister event
+    let deregister_event = Symbol::new(&env, "deregister");
+    assert_eq!(
+        env.events().all(),
+        vec![
+            &env,
+            (
+                contract_id.clone(),
+                vec![&env, deregister_event.into_val(&env), participant.clone().into_val(&env)],
+                ().into_val(&env)
+            )
+        ]
+    );
+
+    // Call admin deregister again for same participant (should return false and not panic)
+    assert!(!client.admin_deregister(&admin, &1, &participant));
+    assert_eq!(client.get_participant_count(), 0);
+}
+
+#[test]
+fn test_deregister_liveness_checks() {
+    let (env, _contract_id, client) = setup();
+    let admin = Address::generate(&env);
+    let participant = Address::generate(&env);
+    client.initialize(&admin);
+
+    env.mock_all_auths();
+    let (leaf, proof) = no_proof_args(&env);
+
+    // Register
+    client.register(&participant, &leaf, &proof);
+
+    // Case 1: end_time != u64::MAX and now > end_time
+    client.set_window(&admin, &0, &100, &200);
+    env.ledger().with_mut(|li| li.timestamp = 250);
+    assert_eq!(
+        client.try_deregister(&participant),
+        Err(Ok(Error::OutsideTimeWindow))
+    );
+
+    // Reset window to u64::MAX but campaign inactive
+    client.set_window(&admin, &1, &100, &u64::MAX);
+    client.set_active(&admin, &2, &false);
+    env.ledger().with_mut(|li| li.timestamp = 250);
+    assert_eq!(
+        client.try_deregister(&participant),
+        Err(Ok(Error::CampaignInactive))
+    );
+
+    // Admin deregister bypasses all these checks
+    assert!(client.admin_deregister(&admin, &3, &participant));
+    assert!(!client.is_participant(&participant));
+}
+

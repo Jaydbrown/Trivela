@@ -609,3 +609,66 @@ fn test_randomized_points_accounting_invariants() {
         );
     }
 }
+
+#[test]
+fn test_tiered_rewards_sorting_and_credit() {
+    let env = Env::default();
+    let contract_id = env.register_contract(None, RewardsContract);
+    let client = RewardsContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let user = Address::generate(&env);
+
+    client.initialize(&admin, &symbol_short!("Trivela"), &symbol_short!("TVL"));
+    env.mock_all_auths();
+
+    // Tiers: [(10, 100), (0, 10), (20, 50)]
+    // Sorted should be: [(10, 100), (20, 50), (0, 10)]
+    let mut input_tiers = Vec::new(&env);
+    input_tiers.push_back((10, 100));
+    input_tiers.push_back((0, 10));
+    input_tiers.push_back((20, 50));
+
+    client.set_tiers(&admin, &1u64, &input_tiers);
+
+    // Verify lookup for various ranks
+    assert_eq!(client.get_tier_for_rank(&5, &1u64), 100);
+    assert_eq!(client.get_tier_for_rank(&10, &1u64), 100);
+    assert_eq!(client.get_tier_for_rank(&11, &1u64), 50);
+    assert_eq!(client.get_tier_for_rank(&20, &1u64), 50);
+    assert_eq!(client.get_tier_for_rank(&21, &1u64), 10);
+    assert_eq!(client.get_tier_for_rank(&100, &1u64), 10);
+
+    // Credit user by rank 5 (gets 100 points)
+    let balance = client.credit_by_rank(&admin, &user, &5u64, &1u64);
+    assert_eq!(balance, 100);
+    assert_eq!(client.balance(&user), 100);
+
+    // Verify events
+    let tier_credit_event = Symbol::new(&env, "tier_credit");
+    assert_eq!(
+        env.events().all(),
+        vec![
+            &env,
+            (
+                contract_id.clone(),
+                vec![&env, symbol_short!("credit").into_val(&env), user.clone().into_val(&env)],
+                100u64.into_val(&env)
+            ),
+            (
+                contract_id.clone(),
+                vec![&env, tier_credit_event.into_val(&env), user.clone().into_val(&env)],
+                (5u64, 100u64).into_val(&env)
+            )
+        ]
+    );
+
+    // Credit user by rank 25 (gets 10 points)
+    let balance = client.credit_by_rank(&admin, &user, &25u64, &1u64);
+    assert_eq!(balance, 110);
+    assert_eq!(client.balance(&user), 110);
+
+    // Clear tiers
+    client.clear_tiers(&admin, &1u64);
+    assert_eq!(client.get_tier_for_rank(&5, &1u64), 0);
+}
+

@@ -644,11 +644,17 @@ fn test_tiered_rewards_sorting_and_credit() {
     assert_eq!(client.balance(&user), 100);
 
     // Verify events
+    let set_tiers_event = Symbol::new(&env, "set_tiers");
     let tier_credit_event = Symbol::new(&env, "tier_credit");
     assert_eq!(
         env.events().all(),
         vec![
             &env,
+            (
+                contract_id.clone(),
+                vec![&env, set_tiers_event.into_val(&env), 1u64.into_val(&env)],
+                ().into_val(&env)
+            ),
             (
                 contract_id.clone(),
                 vec![&env, symbol_short!("credit").into_val(&env), user.clone().into_val(&env)],

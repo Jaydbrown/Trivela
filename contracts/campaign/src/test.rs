@@ -589,11 +589,17 @@ fn test_deregister_success_and_re_register() {
     assert_eq!(client.get_participant_count(), 0);
 
     // Check deregister event
+    let register_event = Symbol::new(&env, "register");
     let deregister_event = Symbol::new(&env, "deregister");
     assert_eq!(
         env.events().all(),
         vec![
             &env,
+            (
+                contract_id.clone(),
+                vec![&env, register_event.into_val(&env), participant.clone().into_val(&env)],
+                ().into_val(&env)
+            ),
             (
                 contract_id.clone(),
                 vec![&env, deregister_event.into_val(&env), participant.clone().into_val(&env)],
@@ -629,11 +635,17 @@ fn test_admin_deregister() {
     assert_eq!(client.get_participant_count(), 0);
 
     // Check deregister event
+    let register_event = Symbol::new(&env, "register");
     let deregister_event = Symbol::new(&env, "deregister");
     assert_eq!(
         env.events().all(),
         vec![
             &env,
+            (
+                contract_id.clone(),
+                vec![&env, register_event.into_val(&env), participant.clone().into_val(&env)],
+                ().into_val(&env)
+            ),
             (
                 contract_id.clone(),
                 vec![&env, deregister_event.into_val(&env), participant.clone().into_val(&env)],

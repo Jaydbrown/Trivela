@@ -657,12 +657,20 @@ fn test_tiered_rewards_sorting_and_credit() {
             ),
             (
                 contract_id.clone(),
-                vec![&env, symbol_short!("credit").into_val(&env), user.clone().into_val(&env)],
+                vec![
+                    &env,
+                    symbol_short!("credit").into_val(&env),
+                    user.clone().into_val(&env)
+                ],
                 100u64.into_val(&env)
             ),
             (
                 contract_id.clone(),
-                vec![&env, tier_credit_event.into_val(&env), user.clone().into_val(&env)],
+                vec![
+                    &env,
+                    tier_credit_event.into_val(&env),
+                    user.clone().into_val(&env)
+                ],
                 (5u64, 100u64).into_val(&env)
             )
         ]
@@ -678,3 +686,362 @@ fn test_tiered_rewards_sorting_and_credit() {
     assert_eq!(client.get_tier_for_rank(&5, &1u64), 0);
 }
 
+// ── Rate Limiting Tests (issue #324) ─────────────────────────────────────────
+
+#[test]
+fn test_rate_limit_enforced() {
+    let env = Env::default();
+    let contract_id = env.register_contract(None, RewardsContract);
+    let client = RewardsContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let user = Address::generate(&env);
+
+    client.initialize(&admin, &symbol_short!("Trivela"), &symbol_short!("TVL"));
+    env.mock_all_auths();
+
+    // Allow 2 calls per window of 10 ledgers.
+    client.set_credit_rate_limit(&admin, &2u32, &10u32);
+    assert_eq!(client.get_credit_rate_limit(), (2u32, 10u32));
+
+    // First two calls succeed.
+    client.credit(&admin, &user, &10);
+    client.credit(&admin, &user, &10);
+    assert_eq!(client.credit_call_count(&admin), 2);
+
+    // Third call in the same window is rejected.
+    let result = client.try_credit(&admin, &user, &10);
+    assert_eq!(result, Err(Ok(Error::RateLimitExceeded)));
+    assert_eq!(client.balance(&user), 20);
+}
+
+#[test]
+fn test_rate_limit_window_rollover_resets_count() {
+    let env = Env::default();
+    let contract_id = env.register_contract(None, RewardsContract);
+    let client = RewardsContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let user = Address::generate(&env);
+
+    client.initialize(&admin, &symbol_short!("Trivela"), &symbol_short!("TVL"));
+    env.mock_all_auths();
+
+    // Window of 10 ledgers, max 1 call per window.
+    client.set_credit_rate_limit(&admin, &1u32, &10u32);
+
+    // At ledger 5 (window 0): one call succeeds, second fails.
+    env.ledger().with_mut(|li| li.sequence_number = 5);
+    client.credit(&admin, &user, &10);
+    assert_eq!(
+        client.try_credit(&admin, &user, &10),
+        Err(Ok(Error::RateLimitExceeded))
+    );
+
+    // At ledger 15 (window 1): count resets, one call succeeds again.
+    env.ledger().with_mut(|li| li.sequence_number = 15);
+    assert_eq!(client.credit_call_count(&admin), 0);
+    client.credit(&admin, &user, &10);
+    assert_eq!(client.credit_call_count(&admin), 1);
+    assert_eq!(client.balance(&user), 20);
+}
+
+#[test]
+fn test_rate_limit_batch_credit_counts_as_n_calls() {
+    let env = Env::default();
+    let contract_id = env.register_contract(None, RewardsContract);
+    let client = RewardsContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let user_a = Address::generate(&env);
+    let user_b = Address::generate(&env);
+    let user_c = Address::generate(&env);
+
+    client.initialize(&admin, &symbol_short!("Trivela"), &symbol_short!("TVL"));
+    env.mock_all_auths();
+
+    // Max 2 calls per window.
+    client.set_credit_rate_limit(&admin, &2u32, &10u32);
+
+    // Batch of 2 recipients uses up both slots.
+    let recipients = vec![&env, (user_a.clone(), 10u64), (user_b.clone(), 10u64)];
+    client.batch_credit(&admin, &recipients);
+    assert_eq!(client.credit_call_count(&admin), 2);
+
+    // A batch of 1 more should fail.
+    let recipients2 = vec![&env, (user_c.clone(), 10u64)];
+    let result = client.try_batch_credit(&admin, &recipients2);
+    assert_eq!(result, Err(Ok(Error::RateLimitExceeded)));
+}
+
+#[test]
+fn test_rate_limit_zero_disables_limiting() {
+    let env = Env::default();
+    let contract_id = env.register_contract(None, RewardsContract);
+    let client = RewardsContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let user = Address::generate(&env);
+
+    client.initialize(&admin, &symbol_short!("Trivela"), &symbol_short!("TVL"));
+    env.mock_all_auths();
+
+    // 0 means unlimited.
+    client.set_credit_rate_limit(&admin, &0u32, &10u32);
+
+    for _ in 0..20 {
+        client.credit(&admin, &user, &1);
+    }
+    assert_eq!(client.balance(&user), 20);
+}
+
+// ── Snapshot Tests (issue #325) ───────────────────────────────────────────────
+
+#[test]
+fn test_snapshot_creation_and_retrieval() {
+    let env = Env::default();
+    let contract_id = env.register_contract(None, RewardsContract);
+    let client = RewardsContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+
+    client.initialize(&admin, &symbol_short!("Trivela"), &symbol_short!("TVL"));
+    env.mock_all_auths();
+
+    env.ledger().with_mut(|li| li.sequence_number = 42);
+    client.snapshot(&admin, &1u64);
+
+    assert_eq!(client.get_snapshot(&1u64), Some(42u64));
+    assert_eq!(client.get_snapshot(&99u64), None);
+}
+
+#[test]
+fn test_snapshot_list_snapshots() {
+    let env = Env::default();
+    let contract_id = env.register_contract(None, RewardsContract);
+    let client = RewardsContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+
+    client.initialize(&admin, &symbol_short!("Trivela"), &symbol_short!("TVL"));
+    env.mock_all_auths();
+
+    env.ledger().with_mut(|li| li.sequence_number = 10);
+    client.snapshot(&admin, &1u64);
+    env.ledger().with_mut(|li| li.sequence_number = 20);
+    client.snapshot(&admin, &2u64);
+
+    let list = client.list_snapshots();
+    assert_eq!(list.len(), 2);
+    assert_eq!(list.get(0).unwrap(), (1u64, 10u64));
+    assert_eq!(list.get(1).unwrap(), (2u64, 20u64));
+}
+
+#[test]
+fn test_snapshot_emits_event() {
+    let env = Env::default();
+    let contract_id = env.register_contract(None, RewardsContract);
+    let client = RewardsContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+
+    client.initialize(&admin, &symbol_short!("Trivela"), &symbol_short!("TVL"));
+    env.mock_all_auths();
+
+    env.ledger().with_mut(|li| li.sequence_number = 77);
+    client.snapshot(&admin, &5u64);
+
+    assert_eq!(
+        env.events().all(),
+        vec![
+            &env,
+            (
+                contract_id.clone(),
+                vec![&env, SNAPSHOT_EVENT.into_val(&env), 5u64.into_val(&env)],
+                77u64.into_val(&env)
+            )
+        ]
+    );
+}
+
+#[test]
+fn test_snapshot_empty_list() {
+    let env = Env::default();
+    let contract_id = env.register_contract(None, RewardsContract);
+    let client = RewardsContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+
+    client.initialize(&admin, &symbol_short!("Trivela"), &symbol_short!("TVL"));
+
+    let list = client.list_snapshots();
+    assert_eq!(list.len(), 0);
+}
+
+// ── Vesting Tests (issue #326) ────────────────────────────────────────────────
+
+#[test]
+fn test_vesting_claim_before_start_returns_zero() {
+    let env = Env::default();
+    let contract_id = env.register_contract(None, RewardsContract);
+    let client = RewardsContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let user = Address::generate(&env);
+
+    client.initialize(&admin, &symbol_short!("Trivela"), &symbol_short!("TVL"));
+    env.mock_all_auths();
+
+    // Vesting starts at ledger 100, ends at 200.
+    env.ledger().with_mut(|li| li.sequence_number = 50);
+    let vest_id = client.credit_vested(&admin, &user, &1000u64, &100u32, &200u32);
+    assert_eq!(vest_id, 0u64);
+
+    // Before start, nothing is unlocked.
+    assert_eq!(client.vested_balance(&user), 0);
+    let result = client.try_claim_vested(&user, &vest_id, &1);
+    assert_eq!(result, Err(Ok(Error::InsufficientBalance)));
+}
+
+#[test]
+fn test_vesting_claim_at_halfway_unlocks_half() {
+    let env = Env::default();
+    let contract_id = env.register_contract(None, RewardsContract);
+    let client = RewardsContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let user = Address::generate(&env);
+
+    client.initialize(&admin, &symbol_short!("Trivela"), &symbol_short!("TVL"));
+    env.mock_all_auths();
+
+    // Vesting: 1000 points, ledgers 0 → 100.
+    client.credit_vested(&admin, &user, &1000u64, &0u32, &100u32);
+
+    // At ledger 50, exactly 500 should be unlocked.
+    env.ledger().with_mut(|li| li.sequence_number = 50);
+    assert_eq!(client.vested_balance(&user), 500);
+    assert_eq!(client.total_vested(&user), 1000);
+
+    let remaining = client.claim_vested(&user, &0u64, &500u64);
+    assert_eq!(remaining, 0);
+    assert_eq!(client.vested_balance(&user), 0);
+}
+
+#[test]
+fn test_vesting_claim_at_end_unlocks_all() {
+    let env = Env::default();
+    let contract_id = env.register_contract(None, RewardsContract);
+    let client = RewardsContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let user = Address::generate(&env);
+
+    client.initialize(&admin, &symbol_short!("Trivela"), &symbol_short!("TVL"));
+    env.mock_all_auths();
+
+    client.credit_vested(&admin, &user, &500u64, &0u32, &100u32);
+
+    env.ledger().with_mut(|li| li.sequence_number = 100);
+    assert_eq!(client.vested_balance(&user), 500);
+
+    let remaining = client.claim_vested(&user, &0u64, &500u64);
+    assert_eq!(remaining, 0);
+    assert_eq!(client.vested_balance(&user), 0);
+}
+
+#[test]
+fn test_vesting_claim_more_than_unlocked_errors() {
+    let env = Env::default();
+    let contract_id = env.register_contract(None, RewardsContract);
+    let client = RewardsContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let user = Address::generate(&env);
+
+    client.initialize(&admin, &symbol_short!("Trivela"), &symbol_short!("TVL"));
+    env.mock_all_auths();
+
+    // 1000 points, vesting 0 → 100; at ledger 50, only 500 is unlocked.
+    client.credit_vested(&admin, &user, &1000u64, &0u32, &100u32);
+    env.ledger().with_mut(|li| li.sequence_number = 50);
+
+    let result = client.try_claim_vested(&user, &0u64, &501u64);
+    assert_eq!(result, Err(Ok(Error::InsufficientBalance)));
+}
+
+#[test]
+fn test_vesting_not_found_errors() {
+    let env = Env::default();
+    let contract_id = env.register_contract(None, RewardsContract);
+    let client = RewardsContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let user = Address::generate(&env);
+
+    client.initialize(&admin, &symbol_short!("Trivela"), &symbol_short!("TVL"));
+    env.mock_all_auths();
+
+    let result = client.try_claim_vested(&user, &99u64, &10u64);
+    assert_eq!(result, Err(Ok(Error::VestingNotFound)));
+}
+
+#[test]
+fn test_vesting_multiple_schedules() {
+    let env = Env::default();
+    let contract_id = env.register_contract(None, RewardsContract);
+    let client = RewardsContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let user = Address::generate(&env);
+
+    client.initialize(&admin, &symbol_short!("Trivela"), &symbol_short!("TVL"));
+    env.mock_all_auths();
+
+    // Two vesting schedules.
+    client.credit_vested(&admin, &user, &200u64, &0u32, &100u32);
+    client.credit_vested(&admin, &user, &300u64, &0u32, &100u32);
+
+    assert_eq!(client.total_vested(&user), 500);
+
+    env.ledger().with_mut(|li| li.sequence_number = 100);
+    // Both fully vested.
+    assert_eq!(client.vested_balance(&user), 500);
+
+    client.claim_vested(&user, &0u64, &200u64);
+    client.claim_vested(&user, &1u64, &300u64);
+    assert_eq!(client.vested_balance(&user), 0);
+}
+
+#[test]
+fn test_vesting_emits_events() {
+    let env = Env::default();
+    let contract_id = env.register_contract(None, RewardsContract);
+    let client = RewardsContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let user = Address::generate(&env);
+
+    client.initialize(&admin, &symbol_short!("Trivela"), &symbol_short!("TVL"));
+    env.mock_all_auths();
+
+    client.credit_vested(&admin, &user, &100u64, &0u32, &50u32);
+    assert_eq!(
+        env.events().all(),
+        vec![
+            &env,
+            (
+                contract_id.clone(),
+                vec![
+                    &env,
+                    VESTED_CREDIT_EVENT.into_val(&env),
+                    user.clone().into_val(&env)
+                ],
+                (0u64, 100u64).into_val(&env)
+            )
+        ]
+    );
+
+    env.ledger().with_mut(|li| li.sequence_number = 50);
+    client.claim_vested(&user, &0u64, &100u64);
+    assert_eq!(
+        env.events().all(),
+        vec![
+            &env,
+            (
+                contract_id.clone(),
+                vec![
+                    &env,
+                    VESTED_CLAIM_EVENT.into_val(&env),
+                    user.clone().into_val(&env)
+                ],
+                (0u64, 100u64).into_val(&env)
+            )
+        ]
+    );
+}

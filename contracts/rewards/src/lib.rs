@@ -10,11 +10,16 @@
 //! - `paused`: topics `(paused,)`, data `is_paused: bool`
 //! - `max_credit_per_call`: topics `(mxcredit,)`, data `max_amount: u64`
 //! - `campaign_multiplier`: topics `(multset, campaign_id)`, data `multiplier_bps: u32`
+//! - `rate_limit_set`: topics `(ratlset,)`, data `(max_calls: u32, window_ledgers: u32)`
+//! - `snapshot`: topics `(snapshot, snapshot_id)`, data `ledger: u32`
+//! - `vested_credit`: topics `(vcredit, user)`, data `(vest_id: u64, total: u64)`
+//! - `vested_claim`: topics `(vclaim, user)`, data `(vest_id: u64, amount: u64)`
 
 #![no_std]
 
 use soroban_sdk::{
-    contract, contracterror, contractimpl, contractmeta, symbol_short, Address, Env, Symbol, Vec,
+    contract, contracterror, contractimpl, contractmeta, contracttype, symbol_short, Address, Env,
+    Symbol, Vec,
 };
 
 #[contracterror]
@@ -28,6 +33,18 @@ pub enum Error {
     CreditLimitExceeded = 5,
     UnsupportedMigration = 6,
     InvalidMultiplier = 7,
+    RateLimitExceeded = 8,
+    VestingNotFound = 9,
+}
+
+/// Vesting schedule record stored per user per vest_id.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct VestingRecord {
+    pub total: u64,
+    pub start_ledger: u32,
+    pub end_ledger: u32,
+    pub claimed: u64,
 }
 
 contractmeta!(
@@ -53,6 +70,24 @@ const CAMPAIGN_MULTIPLIER: Symbol = symbol_short!("mult");
 const TIERS: Symbol = symbol_short!("tiers");
 const BPS_DENOMINATOR: u128 = 10_000;
 
+// Rate limiting constants (issue #324)
+const RATE_LIM_MAX: Symbol = symbol_short!("ratlmax");
+const RATE_LIM_WIN: Symbol = symbol_short!("ratlwin");
+const RATE: Symbol = symbol_short!("rate");
+const RATE_LIM_SET_EVENT: Symbol = symbol_short!("ratlset");
+
+// Snapshot constants (issue #325)
+const SNAPSHOT: Symbol = symbol_short!("snap");
+const SNAP_LIST: Symbol = symbol_short!("snaplist");
+const SNAPSHOT_EVENT: Symbol = symbol_short!("snapshot");
+
+// Vesting constants (issue #326)
+const VEST: Symbol = symbol_short!("vest");
+const VEST_CTR: Symbol = symbol_short!("vestctr");
+const VEST_IDS: Symbol = symbol_short!("vestids");
+const VESTED_CREDIT_EVENT: Symbol = symbol_short!("vcredit");
+const VESTED_CLAIM_EVENT: Symbol = symbol_short!("vclaim");
+
 #[contract]
 pub struct RewardsContract;
 
@@ -74,6 +109,40 @@ fn ensure_not_paused(env: &Env) -> Result<(), Error> {
     }
 
     Ok(())
+}
+
+/// Check caller's rate limit and increment their count for the current window.
+/// `n_calls` is how many calls to count (1 for credit, N for batch_credit).
+fn check_and_increment_rate(env: &Env, caller: &Address, n_calls: u32) -> Result<(), Error> {
+    let max_calls: u32 = env.storage().instance().get(&RATE_LIM_MAX).unwrap_or(0);
+    if max_calls == 0 {
+        return Ok(());
+    }
+    let window_ledgers: u32 = env.storage().instance().get(&RATE_LIM_WIN).unwrap_or(1);
+    let current_ledger = env.ledger().sequence();
+    let window_start = current_ledger.checked_div(window_ledgers).unwrap_or(0);
+    let rate_key = (RATE, caller.clone(), window_start);
+    let count: u32 = env.storage().instance().get(&rate_key).unwrap_or(0);
+    if count.saturating_add(n_calls) > max_calls {
+        return Err(Error::RateLimitExceeded);
+    }
+    env.storage().instance().set(&rate_key, &(count + n_calls));
+    Ok(())
+}
+
+/// Compute unlocked amount for a vesting record at `now` (current ledger sequence).
+fn compute_unlocked(now: u32, record: &VestingRecord) -> u64 {
+    if now <= record.start_ledger {
+        return 0;
+    }
+    if now >= record.end_ledger {
+        return record.total;
+    }
+    let elapsed = (now - record.start_ledger) as u128;
+    let duration = (record.end_ledger - record.start_ledger) as u128;
+    let total = record.total as u128;
+    let unlocked = total * elapsed / duration;
+    (unlocked.min(record.total as u128)) as u64
 }
 
 #[contractimpl]
@@ -181,6 +250,7 @@ impl RewardsContract {
     pub fn credit(env: Env, from: Address, user: Address, amount: u64) -> Result<u64, Error> {
         from.require_auth();
         ensure_not_paused(&env)?;
+        check_and_increment_rate(&env, &from, 1)?;
 
         let max_credit_per_call: u64 = env
             .storage()
@@ -229,6 +299,7 @@ impl RewardsContract {
     }
 
     /// Credit points to multiple users in one call.
+    /// Each recipient counts as one call toward the rate limit.
     pub fn batch_credit(
         env: Env,
         from: Address,
@@ -236,6 +307,7 @@ impl RewardsContract {
     ) -> Result<(), Error> {
         from.require_auth();
         ensure_not_paused(&env)?;
+        check_and_increment_rate(&env, &from, recipients.len())?;
 
         let mut staged = Vec::new(&env);
 
@@ -252,7 +324,6 @@ impl RewardsContract {
                 .set(&(BALANCE, user.clone()), &new_balance);
         }
 
-        // Emit credit event for each recipient
         for (user, amount) in recipients.iter() {
             env.events().publish((CREDIT_EVENT, user), amount);
         }
@@ -341,7 +412,8 @@ impl RewardsContract {
         let sorted = sort_tiers(&env, tiers);
         env.storage().instance().set(&(TIERS, campaign_id), &sorted);
 
-        env.events().publish((Symbol::new(&env, "set_tiers"), campaign_id), ());
+        env.events()
+            .publish((Symbol::new(&env, "set_tiers"), campaign_id), ());
         env.storage().instance().extend_ttl(50, 100);
         Ok(())
     }
@@ -352,14 +424,16 @@ impl RewardsContract {
 
         env.storage().instance().remove(&(TIERS, campaign_id));
 
-        env.events().publish((Symbol::new(&env, "clear_tiers"), campaign_id), ());
+        env.events()
+            .publish((Symbol::new(&env, "clear_tiers"), campaign_id), ());
         env.storage().instance().extend_ttl(50, 100);
         Ok(())
     }
 
     /// Get points reward for a given rank under a campaign.
     pub fn get_tier_for_rank(env: Env, rank: u64, campaign_id: u64) -> u64 {
-        let tiers_opt: Option<Vec<(u64, u64)>> = env.storage().instance().get(&(TIERS, campaign_id));
+        let tiers_opt: Option<Vec<(u64, u64)>> =
+            env.storage().instance().get(&(TIERS, campaign_id));
         if let Some(tiers) = tiers_opt {
             for (max_rank, points) in tiers.iter() {
                 if max_rank > 0 {
@@ -388,16 +462,211 @@ impl RewardsContract {
         let points = Self::get_tier_for_rank(env.clone(), rank, campaign_id);
         let new_balance = Self::credit(env.clone(), from, user.clone(), points)?;
 
-        env.events().publish(
-            (Symbol::new(&env, "tier_credit"), user),
-            (rank, points),
-        );
+        env.events()
+            .publish((Symbol::new(&env, "tier_credit"), user), (rank, points));
 
         Ok(new_balance)
     }
+
+    // ── Rate Limiting (issue #324) ────────────────────────────────────────────
+
+    /// Set per-caller credit rate limit (admin only).
+    /// `max_calls` credits allowed per `window_ledgers` ledger window.
+    /// Set `max_calls = 0` to disable rate limiting.
+    pub fn set_credit_rate_limit(
+        env: Env,
+        admin: Address,
+        max_calls: u32,
+        window_ledgers: u32,
+    ) -> Result<(), Error> {
+        require_admin(&env, &admin)?;
+        env.storage().instance().set(&RATE_LIM_MAX, &max_calls);
+        env.storage().instance().set(&RATE_LIM_WIN, &window_ledgers);
+        env.events()
+            .publish((RATE_LIM_SET_EVENT,), (max_calls, window_ledgers));
+        env.storage().instance().extend_ttl(50, 100);
+        Ok(())
+    }
+
+    /// Get the current rate limit config: `(max_calls, window_ledgers)`.
+    /// Returns `(0, 0)` when no limit is configured.
+    pub fn get_credit_rate_limit(env: Env) -> (u32, u32) {
+        let max_calls: u32 = env.storage().instance().get(&RATE_LIM_MAX).unwrap_or(0);
+        let window_ledgers: u32 = env.storage().instance().get(&RATE_LIM_WIN).unwrap_or(0);
+        (max_calls, window_ledgers)
+    }
+
+    /// Get the number of credit calls made by `caller` in the current window.
+    pub fn credit_call_count(env: Env, caller: Address) -> u32 {
+        let window_ledgers: u32 = env.storage().instance().get(&RATE_LIM_WIN).unwrap_or(1);
+        let current_ledger = env.ledger().sequence();
+        let window_start = if window_ledgers > 0 {
+            current_ledger.checked_div(window_ledgers).unwrap_or(0)
+        } else {
+            0u32
+        };
+        let rate_key = (RATE, caller, window_start);
+        env.storage().instance().get(&rate_key).unwrap_or(0)
+    }
+
+    // ── Snapshot (issue #325) ─────────────────────────────────────────────────
+
+    /// Record the current ledger number under `snapshot_id` (admin only).
+    /// Does NOT copy balances — stores a ledger reference for off-chain indexing.
+    /// Off-chain indexers can use the ledger number with Horizon `getLedgerEntries`
+    /// to reconstruct balances at that point in time.
+    pub fn snapshot(env: Env, admin: Address, snapshot_id: u64) -> Result<(), Error> {
+        require_admin(&env, &admin)?;
+        let ledger_number = env.ledger().sequence() as u64;
+        env.storage()
+            .instance()
+            .set(&(SNAPSHOT, snapshot_id), &ledger_number);
+
+        let mut list: Vec<(u64, u64)> = env
+            .storage()
+            .instance()
+            .get(&SNAP_LIST)
+            .unwrap_or_else(|| Vec::new(&env));
+        list.push_back((snapshot_id, ledger_number));
+        env.storage().instance().set(&SNAP_LIST, &list);
+
+        env.events()
+            .publish((SNAPSHOT_EVENT, snapshot_id), ledger_number);
+        env.storage().instance().extend_ttl(50, 100);
+        Ok(())
+    }
+
+    /// Returns the ledger number recorded for `snapshot_id`, or `None`.
+    pub fn get_snapshot(env: Env, snapshot_id: u64) -> Option<u64> {
+        env.storage().instance().get(&(SNAPSHOT, snapshot_id))
+    }
+
+    /// Returns all `(snapshot_id, ledger_number)` pairs in creation order.
+    pub fn list_snapshots(env: Env) -> Vec<(u64, u64)> {
+        env.storage()
+            .instance()
+            .get(&SNAP_LIST)
+            .unwrap_or_else(|| Vec::new(&env))
+    }
+
+    // ── Vesting (issue #326) ──────────────────────────────────────────────────
+
+    /// Credit a linearly-vesting amount to a user (authorized caller only).
+    /// Vesting is linear: `unlocked = total * (now - start_ledger) / (end_ledger - start_ledger)`.
+    /// Returns the new vest_id for this schedule.
+    pub fn credit_vested(
+        env: Env,
+        from: Address,
+        user: Address,
+        total_amount: u64,
+        start_ledger: u32,
+        end_ledger: u32,
+    ) -> Result<u64, Error> {
+        from.require_auth();
+        ensure_not_paused(&env)?;
+
+        let vest_ctr_key = (VEST_CTR, user.clone());
+        let vest_id: u64 = env.storage().instance().get(&vest_ctr_key).unwrap_or(0);
+        let next_vest_id = vest_id + 1;
+
+        let record = VestingRecord {
+            total: total_amount,
+            start_ledger,
+            end_ledger,
+            claimed: 0,
+        };
+        env.storage()
+            .instance()
+            .set(&(VEST, user.clone(), vest_id), &record);
+        env.storage().instance().set(&vest_ctr_key, &next_vest_id);
+
+        let vest_ids_key = (VEST_IDS, user.clone());
+        let mut ids: Vec<u64> = env
+            .storage()
+            .instance()
+            .get(&vest_ids_key)
+            .unwrap_or_else(|| Vec::new(&env));
+        ids.push_back(vest_id);
+        env.storage().instance().set(&vest_ids_key, &ids);
+
+        env.events()
+            .publish((VESTED_CREDIT_EVENT, user), (vest_id, total_amount));
+        env.storage().instance().extend_ttl(50, 100);
+        Ok(vest_id)
+    }
+
+    /// Returns the currently unlocked but unclaimed vested balance for a user
+    /// across all active vesting schedules.
+    pub fn vested_balance(env: Env, user: Address) -> u64 {
+        let vest_ids_key = (VEST_IDS, user.clone());
+        let ids: Vec<u64> = env
+            .storage()
+            .instance()
+            .get(&vest_ids_key)
+            .unwrap_or_else(|| Vec::new(&env));
+        let now = env.ledger().sequence();
+        let mut total_available = 0u64;
+        for vest_id in ids.iter() {
+            let key = (VEST, user.clone(), vest_id);
+            if let Some(record) = env.storage().instance().get::<_, VestingRecord>(&key) {
+                let unlocked = compute_unlocked(now, &record);
+                let available = unlocked.saturating_sub(record.claimed);
+                total_available = total_available.saturating_add(available);
+            }
+        }
+        total_available
+    }
+
+    /// Claim up to `amount` from the unlocked portion of a specific vesting schedule.
+    /// Returns the remaining claimable amount in that vest schedule after this claim.
+    pub fn claim_vested(env: Env, user: Address, vest_id: u64, amount: u64) -> Result<u64, Error> {
+        user.require_auth();
+        ensure_not_paused(&env)?;
+
+        let key = (VEST, user.clone(), vest_id);
+        let mut record: VestingRecord = env
+            .storage()
+            .instance()
+            .get(&key)
+            .ok_or(Error::VestingNotFound)?;
+
+        let now = env.ledger().sequence();
+        let unlocked = compute_unlocked(now, &record);
+        let available = unlocked.saturating_sub(record.claimed);
+
+        if amount > available {
+            return Err(Error::InsufficientBalance);
+        }
+
+        record.claimed = record.claimed.checked_add(amount).ok_or(Error::Overflow)?;
+        env.storage().instance().set(&key, &record);
+
+        env.events()
+            .publish((VESTED_CLAIM_EVENT, user), (vest_id, amount));
+        env.storage().instance().extend_ttl(50, 100);
+        Ok(available - amount)
+    }
+
+    /// Returns the sum of all vesting schedule totals for a user (vested + unvested).
+    pub fn total_vested(env: Env, user: Address) -> u64 {
+        let vest_ids_key = (VEST_IDS, user.clone());
+        let ids: Vec<u64> = env
+            .storage()
+            .instance()
+            .get(&vest_ids_key)
+            .unwrap_or_else(|| Vec::new(&env));
+        let mut total = 0u64;
+        for vest_id in ids.iter() {
+            let key = (VEST, user.clone(), vest_id);
+            if let Some(record) = env.storage().instance().get::<_, VestingRecord>(&key) {
+                total = total.saturating_add(record.total);
+            }
+        }
+        total
+    }
 }
 
-fn sort_tiers(env: &Env, tiers: Vec<(u64, u64)>) -> Vec<(u64, u64)> {
+fn sort_tiers(_env: &Env, tiers: Vec<(u64, u64)>) -> Vec<(u64, u64)> {
     let mut sorted = tiers.clone();
     let len = sorted.len();
     if len <= 1 {
@@ -409,13 +678,7 @@ fn sort_tiers(env: &Env, tiers: Vec<(u64, u64)>) -> Vec<(u64, u64)> {
             let (rank_a, points_a) = sorted.get(j).unwrap();
             let (rank_b, points_b) = sorted.get(j + 1).unwrap();
 
-            let swap = if rank_a == 0 && rank_b != 0 {
-                true
-            } else if rank_a != 0 && rank_b != 0 && rank_a > rank_b {
-                true
-            } else {
-                false
-            };
+            let swap = rank_b != 0 && (rank_a == 0 || rank_a > rank_b);
 
             if swap {
                 sorted.set(j, (rank_b, points_b));
@@ -425,7 +688,6 @@ fn sort_tiers(env: &Env, tiers: Vec<(u64, u64)>) -> Vec<(u64, u64)> {
     }
     sorted
 }
-
 
 #[cfg(test)]
 mod test;

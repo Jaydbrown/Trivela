@@ -40,6 +40,9 @@ jobs:
       - name: Run contract tests
         run: cargo test --workspace
 
+      - name: Run integration tests
+        run: cargo test --package integration
+
       - name: Install Stellar CLI
         run: |
           curl -fsSL https://github.com/stellar/stellar-cli/raw/main/install.sh | sh

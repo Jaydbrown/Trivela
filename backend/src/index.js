@@ -33,6 +33,7 @@ import {
 } from './schemas.js';
 import { createStorageAdapter } from './storage/index.js';
 import { uploadCampaignImage, validateImageUpload, MAX_IMAGE_SIZE_BYTES } from './services/imageUpload.js';
+import { buildCampaignStats } from './services/campaignStatsService.js';
 
 const DEFAULT_PORT = 3001;
 const DEFAULT_RATE_LIMIT_WINDOW_MS = 60_000;
@@ -541,6 +542,24 @@ export async function createApp(options = {}) {
   }
 
   /** @param {import('express').Request} req @param {import('express').Response} res */
+  function getCampaignStats(req, res) {
+    const campaign = campaignRepository.getById(req.params.id);
+    if (!campaign) {
+      return res.status(404).json({ error: 'Campaign not found', code: 'CAMPAIGN_NOT_FOUND' });
+    }
+
+    const stats = buildCampaignStats({
+      db: dal.db,
+      campaign,
+      referralRepository,
+      indexerCursor: indexerCursorState,
+      query: req.query,
+    });
+
+    return res.json(stats);
+  }
+
+  /** @param {import('express').Request} req @param {import('express').Response} res */
   function getCampaignBySlug(req, res) {
     const campaign = campaignRepository.getBySlug(req.params.slug);
     if (!campaign) {
@@ -928,6 +947,7 @@ export async function createApp(options = {}) {
     app.get(`${prefix}/tags`, rateLimiter, listTags);
     app.get(`${prefix}/campaigns/by-slug/:slug`, rateLimiter, getCampaignBySlug);
     app.get(`${prefix}/campaigns/:id`, rateLimiter, getCampaignById);
+    app.get(`${prefix}/campaigns/:id/stats`, rateLimiter, getCampaignStats);
     app.get(`${prefix}/audit-logs`, rateLimiter, requireApiKey, listAuditLogs);
     app.get(`${prefix}/indexer/cursor`, rateLimiter, getIndexerCursorState);
     app.post(`${prefix}/indexer/cursor`, rateLimiter, requireApiKey, setIndexerCursorState);

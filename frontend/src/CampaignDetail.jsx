@@ -1,15 +1,13 @@
 import { useEffect, useState, useCallback } from 'react';
 import { Link, useParams, useSearchParams } from 'react-router-dom';
-import { apiUrl } from './config';
+import { apiUrl, DEFAULT_OG_IMAGE } from './config';
 import Header from './components/Header';
 import RegisterCampaign from './RegisterCampaign';
 import StatusBadge from './components/StatusBadge';
+import PageMeta from './components/PageMeta';
+import { useCampaignPolling } from './hooks/useCampaignPolling';
 import './CampaignDetail.css';
 
-/**
- * Campaign Detail Page
- * Fetches and displays full information for a specific campaign.
- */
 export default function CampaignDetail({
   theme,
   onToggleTheme,
@@ -27,56 +25,24 @@ export default function CampaignDetail({
 }) {
   const { id } = useParams();
   const [searchParams] = useSearchParams();
-  const [campaign, setCampaign] = useState(null);
-  const [error, setError] = useState('');
-  const [isLoading, setIsLoading] = useState(true);
-  const [retryCount, setRetryCount] = useState(0);
+  const {
+    campaign,
+    onChainState,
+    isPolling,
+    isPaused,
+    lastUpdated,
+    stateToast,
+    error,
+    refresh,
+  } = useCampaignPolling({ campaignId: id, enabled: Boolean(id) });
 
-  // Referral state
   const [referralCount, setReferralCount] = useState(0);
   const [bonusEarned, setBonusEarned] = useState(0);
   const [refLinkCopied, setRefLinkCopied] = useState(false);
 
-  // The referrer address embedded in the URL when arriving via an invite link
   const incomingRef = searchParams.get('ref');
+  const isLoading = !campaign && !error;
 
-  useEffect(() => {
-    const controller = new AbortController();
-
-    setIsLoading(true);
-    setError('');
-
-    fetch(apiUrl(`/api/v1/campaigns/${id}`), {
-      signal: controller.signal,
-    })
-      .then(async (response) => {
-        if (!response.ok) {
-          if (response.status === 404) {
-            throw new Error('Campaign not found');
-          }
-
-          throw new Error(`API returned ${response.status}`);
-        }
-
-        return response.json();
-      })
-      .then((data) => {
-        setCampaign(data);
-      })
-      .catch((err) => {
-        if (err.name === 'AbortError') return;
-        setError(err.message || 'Unable to load campaign details.');
-      })
-      .finally(() => {
-        if (!controller.signal.aborted) {
-          setIsLoading(false);
-        }
-      });
-
-    return () => controller.abort();
-  }, [id, retryCount]);
-
-  // Load referral stats whenever wallet or campaign changes
   useEffect(() => {
     if (!walletAddress || !id) return;
 
@@ -91,7 +57,6 @@ export default function CampaignDetail({
       .catch(() => {});
   }, [walletAddress, id]);
 
-  // Record incoming referral after a successful registration
   const handleRegistered = useCallback(() => {
     if (!incomingRef || !walletAddress || !id) return;
     if (incomingRef === walletAddress) return;
@@ -116,7 +81,6 @@ export default function CampaignDetail({
 
   const buildInviteLink = () => {
     const base = `${window.location.origin}/campaign/${id}`;
-    const shortAddress = walletAddress.slice(0, 8) + walletAddress.slice(-4);
     return `${base}?ref=${walletAddress}`;
   };
 
@@ -126,7 +90,7 @@ export default function CampaignDetail({
       setRefLinkCopied(true);
       setTimeout(() => setRefLinkCopied(false), 2000);
     } catch (_) {
-      // Clipboard API unavailable — silent fail
+      // Clipboard API unavailable
     }
   };
 
@@ -137,8 +101,19 @@ export default function CampaignDetail({
     );
   };
 
+  const campaignImage = campaign?.imageUrl || DEFAULT_OG_IMAGE;
+
   return (
     <div className="campaign-detail-page">
+      <PageMeta
+        title={campaign ? `${campaign.name} | Trivela` : 'Campaign | Trivela'}
+        description={
+          campaign?.description ||
+          'View campaign details, register with your Stellar wallet, and earn rewards on Trivela.'
+        }
+        path={`/campaign/${id}`}
+        image={campaignImage}
+      />
       <Header
         theme={theme}
         onToggleTheme={onToggleTheme}
@@ -152,15 +127,31 @@ export default function CampaignDetail({
         onDisconnectWallet={onDisconnectWallet}
       />
 
+      {stateToast ? (
+        <div className="detail-toast" role="status">
+          {stateToast}
+        </div>
+      ) : null}
+
       <main className="detail-main">
         <div className="detail-container">
           <nav className="detail-nav">
             <Link to="/" className="back-link">
               Back to campaigns
             </Link>
-            <Link to={`/campaign/${id}/leaderboard`} className="btn btn-secondary detail-leaderboard-btn">
-              View leaderboard
-            </Link>
+            <div className="detail-nav-actions">
+              {!isPaused && campaign ? (
+                <span className="detail-live-badge" aria-label="Live campaign data">
+                  Live
+                </span>
+              ) : null}
+              <button type="button" className="btn btn-secondary detail-refresh-btn" onClick={refresh}>
+                {isPolling ? 'Refreshing...' : 'Refresh'}
+              </button>
+              <Link to={`/campaign/${id}/leaderboard`} className="btn btn-secondary detail-leaderboard-btn">
+                View leaderboard
+              </Link>
+            </div>
           </nav>
 
           {isLoading ? (
@@ -170,11 +161,7 @@ export default function CampaignDetail({
               <h2>Error</h2>
               <p>{error}</p>
               <div className="detail-actions">
-                <button
-                  type="button"
-                  className="btn btn-primary"
-                  onClick={() => setRetryCount((count) => count + 1)}
-                >
+                <button type="button" className="btn btn-primary" onClick={refresh}>
                   Retry request
                 </button>
                 <Link to="/" className="btn btn-secondary">
@@ -190,9 +177,32 @@ export default function CampaignDetail({
                   <h1 className="detail-title">{campaign.name}</h1>
                   <StatusBadge status={campaign.status} />
                 </div>
+                {lastUpdated ? (
+                  <p className="detail-updated">Last updated {lastUpdated.toLocaleTimeString()}</p>
+                ) : null}
               </header>
 
               <div className="detail-body">
+                {onChainState ? (
+                  <section className="detail-section detail-on-chain">
+                    <h2>On-chain status</h2>
+                    <div className="detail-grid">
+                      <div className="detail-stat">
+                        <h3>Contract active</h3>
+                        <p className="stat-value">{onChainState.isActive ? 'Yes' : 'No'}</p>
+                      </div>
+                      <div className="detail-stat">
+                        <h3>Within window</h3>
+                        <p className="stat-value">{onChainState.isWithinWindow ? 'Yes' : 'No'}</p>
+                      </div>
+                      <div className="detail-stat">
+                        <h3>Participants</h3>
+                        <p className="stat-value">{onChainState.participantCount}</p>
+                      </div>
+                    </div>
+                  </section>
+                ) : null}
+
                 <section className="detail-section">
                   <h2>Description</h2>
                   <p className="detail-description">
@@ -239,15 +249,15 @@ export default function CampaignDetail({
                   )}
                 </section>
 
-                {walletAddress && (
+                {walletAddress ? (
                   <section className="referral-section" aria-label="Invite friends">
                     <div className="referral-header">
                       <h3 className="referral-title">Invite Friends</h3>
-                      {campaign.referralBonusPoints > 0 && (
+                      {campaign.referralBonusPoints > 0 ? (
                         <p className="referral-bonus-note">
                           Earn <strong>+{campaign.referralBonusPoints} bonus pts</strong> per friend who registers
                         </p>
-                      )}
+                      ) : null}
                     </div>
 
                     <div className="referral-stats">
@@ -257,12 +267,12 @@ export default function CampaignDetail({
                           {referralCount === 1 ? 'friend invited' : 'friends invited'}
                         </span>
                       </div>
-                      {campaign.referralBonusPoints > 0 && (
+                      {campaign.referralBonusPoints > 0 ? (
                         <div className="referral-stat">
                           <span className="referral-stat-value">{bonusEarned}</span>
                           <span className="referral-stat-label">bonus pts earned</span>
                         </div>
-                      )}
+                      ) : null}
                     </div>
 
                     <div className="referral-link-row">
@@ -294,7 +304,7 @@ export default function CampaignDetail({
                         Share on X
                       </a>
                       <a
-                        href={`https://discord.com/channels/@me`}
+                        href="https://discord.com/channels/@me"
                         target="_blank"
                         rel="noopener noreferrer"
                         className="btn referral-share-btn referral-share-discord"
@@ -313,7 +323,7 @@ export default function CampaignDetail({
                       </a>
                     </div>
                   </section>
-                )}
+                ) : null}
               </div>
             </article>
           )}

@@ -83,6 +83,26 @@ validateFrontendEnv();
 
 export const API_BASE_URL = trimTrailingSlash(import.meta.env.VITE_API_URL || '');
 
+const DEFAULT_POLL_INTERVAL_MS = 30_000;
+
+export function getPollIntervalMs() {
+  const raw = import.meta.env.VITE_POLL_INTERVAL_MS;
+  if (raw === undefined || raw === '') {
+    return DEFAULT_POLL_INTERVAL_MS;
+  }
+  const parsed = Number.parseInt(String(raw), 10);
+  if (!Number.isFinite(parsed) || parsed < 5_000) {
+    return DEFAULT_POLL_INTERVAL_MS;
+  }
+  return parsed;
+}
+
+export const SITE_URL =
+  trimTrailingSlash(import.meta.env.VITE_SITE_URL || '') ||
+  (typeof window !== 'undefined' ? window.location.origin : '');
+
+export const DEFAULT_OG_IMAGE = '/og-default.png';
+
 const DEV_NETWORK_STORAGE_KEY = 'trivela:stellarNetwork';
 
 let runtimeConfig = {

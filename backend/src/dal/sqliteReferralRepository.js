@@ -48,6 +48,22 @@ export function createSqliteReferralRepository({ db }) {
    * @param {string|number} campaignId
    * @param {string} refereeAddress
    */
+  function listByCampaign(campaignId) {
+    const rows = db
+      .prepare(
+        `SELECT * FROM referrals WHERE campaign_id = ? ORDER BY created_at ASC`,
+      )
+      .all(Number(campaignId));
+
+    return rows.map((row) => ({
+      id: String(row.id),
+      campaignId: String(row.campaign_id),
+      referrerAddress: row.referrer_address,
+      refereeAddress: row.referee_address,
+      createdAt: row.created_at,
+    }));
+  }
+
   function getByRefereeAndCampaign(campaignId, refereeAddress) {
     const row = db
       .prepare(
@@ -65,5 +81,5 @@ export function createSqliteReferralRepository({ db }) {
     };
   }
 
-  return { create, countByReferrer, getByRefereeAndCampaign };
+  return { create, countByReferrer, listByCampaign, getByRefereeAndCampaign };
 }

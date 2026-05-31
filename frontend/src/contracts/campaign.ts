@@ -227,6 +227,15 @@ export class Client {
     );
   }
 
+  async is_within_window(): Promise<AssembledTransaction<boolean>> {
+    return new AssembledTransaction(
+      this.options,
+      'is_within_window',
+      [],
+      (val) => scValToNative(val)
+    );
+  }
+
   async get_window(): Promise<AssembledTransaction<[bigint, bigint]>> {
     return new AssembledTransaction(
       this.options,

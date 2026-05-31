@@ -41,6 +41,8 @@ jobs:
       - name: Build frontend
         run: npm run build --workspace=frontend
 
+      # Optional: add a Lighthouse CI step targeting PWA score >= 90 on production builds.
+
       - name: Upload frontend build artifact
         if: success()
         uses: actions/upload-artifact@v4

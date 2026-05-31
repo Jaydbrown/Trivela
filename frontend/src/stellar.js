@@ -206,6 +206,31 @@ export async function submitClaimTransaction(walletAddress, amount) {
 
 /* ---------- campaign contract helpers ---------- */
 
+export async function fetchCampaignOnChainState(contractId) {
+  const resolvedId = contractId || getCampaignContractId();
+  if (!resolvedId) {
+    return null;
+  }
+
+  const client = new CampaignClient({
+    rpcUrl: getSorobanRpcUrl(),
+    networkPassphrase: getNetworkPassphrase(),
+    contractId: resolvedId,
+  });
+
+  const [isActive, isWithinWindow, participantCount] = await Promise.all([
+    client.is_active().then((tx) => tx.simulate()),
+    client.is_within_window().then((tx) => tx.simulate()),
+    client.get_participant_count().then((tx) => tx.simulate()),
+  ]);
+
+  return {
+    isActive,
+    isWithinWindow,
+    participantCount: Number(participantCount),
+  };
+}
+
 export async function checkParticipantStatus(walletAddress) {
   const contractId = getCampaignContractId();
   if (!contractId) {

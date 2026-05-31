@@ -88,6 +88,20 @@ async function getCampaignById(id) {
   return request(apiUrl(`/api/v1/campaigns/${id}`));
 }
 
+/**
+ * @param {string | number} id
+ * @param {{ range?: string, from?: string, to?: string }} [params]
+ */
+async function getCampaignStats(id, params = {}) {
+  const qs = new URLSearchParams();
+  if (params.range) qs.set('range', params.range);
+  if (params.from) qs.set('from', params.from);
+  if (params.to) qs.set('to', params.to);
+  const url =
+    apiUrl(`/api/v1/campaigns/${id}/stats`) + (qs.toString() ? `?${qs}` : '');
+  return request(url);
+}
+
 /** @param {string} slug */
 async function getCampaignBySlug(slug) {
   return request(apiUrl(`/api/v1/campaigns/by-slug/${encodeURIComponent(slug)}`));
@@ -155,6 +169,7 @@ async function getConfig() {
 export const apiClient = {
   getCampaigns,
   getCampaignById,
+  getCampaignStats,
   getCampaignBySlug,
   createCampaign,
   updateCampaign,

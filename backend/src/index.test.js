@@ -88,6 +88,23 @@ test('GET /api/v1/campaigns/:id returns 404 for a missing campaign', async () =>
   }
 });
 
+test('GET /api/v1/campaigns/:id/stats returns analytics payload', async () => {
+  const { server, baseUrl } = await startTestServer();
+
+  try {
+    const response = await fetch(`${baseUrl}/api/v1/campaigns/1/stats?range=7d`);
+    assert.equal(response.status, 200);
+    const body = await response.json();
+    assert.equal(body.campaignId, '1');
+    assert.ok(body.summary);
+    assert.ok(Array.isArray(body.registrationsByDay));
+    assert.ok(Array.isArray(body.pointsByDay));
+    assert.equal(typeof body.onChainSynced, 'boolean');
+  } finally {
+    await stopTestServer(server);
+  }
+});
+
 test('GET /api/campaigns and /api/v1/campaigns stay backward compatible', async () => {
   const { server, baseUrl } = await startTestServer();
 

@@ -933,6 +933,28 @@
   margin: 0 0 1rem;
 }
 
+.admin-analytics-links {
+  text-align: left;
+}
+
+.admin-analytics-list {
+  list-style: none;
+  margin: 0.75rem 0 0;
+  padding: 0;
+  display: grid;
+  gap: 0.5rem;
+}
+
+.admin-analytics-link {
+  color: var(--accent);
+  text-decoration: none;
+  font-weight: 600;
+}
+
+.admin-analytics-link:hover {
+  color: var(--accent-hover);
+}
+
 .cta-band {
   width: min(1200px, calc(100% - 2rem));
   margin: 0 auto;

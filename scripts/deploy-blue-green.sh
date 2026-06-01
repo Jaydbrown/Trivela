@@ -83,7 +83,7 @@ log "Starting blue/green deployment of ${DEPLOY_IMAGE}"
 ACTIVE=$(detect_active_color)
 log "Current active slot: ${ACTIVE:-none}"
 
-log "Launching green container on port ${GREEN_PORT}…"
+log "Launching green container on port ${GREEN_PORT}..."
 docker run -d \
   --name "$GREEN_CONTAINER" \
   --restart unless-stopped \
@@ -91,7 +91,7 @@ docker run -d \
   --env-file .env \
   "$DEPLOY_IMAGE"
 
-log "Waiting for green to pass health checks (max ${MAX_HEALTH_WAIT}s)…"
+log "Waiting for green to pass health checks (max ${MAX_HEALTH_WAIT}s)..."
 WAITED=0
 until curl -sf "$HEALTH_URL" | grep -q '"status"'; do
   if [[ $WAITED -ge $MAX_HEALTH_WAIT ]]; then
@@ -103,27 +103,28 @@ until curl -sf "$HEALTH_URL" | grep -q '"status"'; do
 done
 ok "Green is healthy after ${WAITED}s."
 
-log "Updating nginx upstream → green (port ${GREEN_PORT})…"
+log "Updating nginx upstream to green (port ${GREEN_PORT})..."
 write_upstream "$GREEN_PORT"
 ok "Traffic now routed to green."
 
-log "Settling for ${SETTLE_WAIT}s — watching green logs for errors…"
+log "Settling for ${SETTLE_WAIT}s — watching green logs for errors..."
 sleep "$SETTLE_WAIT"
 
-ERROR_COUNT=$(docker logs --since "${SETTLE_WAIT}s" "$GREEN_CONTAINER" 2>&1 | grep -c '"level":50' || true)
+ERROR_COUNT=$(docker logs --since "${SETTLE_WAIT}s" "$GREEN_CONTAINER" 2>&1 | grep -ciE '"level":50|"level":"error"|ERROR|FATAL' || true)
 if [[ "$ERROR_COUNT" -gt 0 ]]; then
   warn "${ERROR_COUNT} error-level log entries detected in green during settle window."
   rollback
 fi
+log "Verification passed (0 errors in last ${SETTLE_WAIT}s)"
 
 if [[ "$ACTIVE" == "blue" ]]; then
-  log "Stopping blue container…"
+  log "Stopping blue container..."
   docker stop "$BLUE_CONTAINER" || true
   docker rm "$BLUE_CONTAINER" || true
   ok "Blue container stopped."
 fi
 
-log "Renaming green → blue for next cycle…"
+log "Renaming green to blue for next cycle..."
 docker rename "$GREEN_CONTAINER" "$BLUE_CONTAINER"
 
 ok "Deployment complete. ${DEPLOY_IMAGE} is live on port ${BLUE_PORT}."

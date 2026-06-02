@@ -64,11 +64,79 @@ services:
 
 Similar to Docker Compose, restarts on failure with exponential backoff.
 
+## Blue/Green Deployment
+
+Blue/green deployment eliminates downtime by running two identical backend
+environments in parallel and atomically switching traffic only after the new
+environment is verified healthy.
+
+### Overview
+
+| Colour | Role |
+|--------|------|
+| **blue** | Currently serving production traffic |
+| **green** | New version under validation |
+
+The load balancer (nginx) maintains an `upstream trivela_backend` block that
+points to whichever colour is active. Switching traffic is a single nginx
+reload — no DNS changes, no downtime.
+
+### Environments
+
+Both environments are identical in configuration. They differ only in port:
+
+| Environment | Internal Port |
+|-------------|---------------|
+| blue        | 3001          |
+| green       | 3002          |
+
+### Deployment steps
+
+1. **Build** the new image and tag it `trivela-backend:green`.
+2. **Start green** alongside blue:
+   ```bash
+   docker compose --profile green up -d backend-green
+   ```
+3. **Poll `/health`** on the green container (max 60 s):
+   ```bash
+   ./scripts/deploy-blue-green.sh
+   ```
+4. The script updates the nginx upstream to point at green and reloads nginx.
+5. After 30 s the script checks green logs for errors. If none are found it
+   stops the blue container.
+6. On any failure the script rolls back by switching nginx back to blue and
+   stopping green.
+
+### Nginx upstream template
+
+The nginx config uses an `upstream` block so the active backend can be
+changed with a single variable substitution and reload:
+
+```nginx
+upstream trivela_backend {
+    server ${TRIVELA_BACKEND_HOST}:${TRIVELA_BACKEND_PORT};
+}
+```
+
+At switch time `deploy-blue-green.sh` writes the correct host/port into
+`nginx/trivela.conf` and runs `nginx -s reload`.
+
+### Rollback
+
+If the green environment fails health checks or log scanning finds errors:
+
+1. nginx upstream is reverted to blue.
+2. nginx is reloaded.
+3. The green container is stopped.
+4. The operator is notified via the script exit code (non-zero).
+
+See [RUNBOOK.md](./RUNBOOK.md) for full rollback procedures.
+
 ## Admin key management (2-step transfer)
 
 Both the `rewards` and `campaign` contracts use a **propose-then-accept** admin
-rotation pattern (issue #281) to eliminate the "keyed-in wrong address, key is
-now lost" failure mode of a one-step `set_admin` call.
+rotation pattern to eliminate the "keyed-in wrong address, key is now lost"
+failure mode of a one-step `set_admin` call.
 
 ### Read functions
 
@@ -98,17 +166,7 @@ step 1 cannot brick the contract.
 - [ ] Call `propose_admin` from the current admin and confirm the
       `aproposed` event fires with the expected `new_admin` address.
 - [ ] Call `accept_admin` from the new admin keypair within 30 days (the
-      instance-storage TTL — see [`TTL_STRATEGY.md`](./TTL_STRATEGY.md)).
-      A failed acceptance can be retried as long as the proposal is still
-      live.
+      instance-storage TTL).
 - [ ] Verify `admin()` returns the new address and `pending_admin()` returns
       `None`.
 
-### Why not full N-of-M multisig?
-
-A full threshold multisig inside the contract would require significantly more
-state, careful nonce handling, and per-call signature aggregation logic. The
-2-step transfer pattern delivers most of the safety upside (no single-typo
-loss of control, no rushed rotation, clean event trail) with low complexity
-overhead, and it composes naturally with a future governance contract that
-acts as the admin address.

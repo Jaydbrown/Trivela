@@ -39,6 +39,7 @@ export default function CampaignDetail({
   const [referralCount, setReferralCount] = useState(0);
   const [bonusEarned, setBonusEarned] = useState(0);
   const [refLinkCopied, setRefLinkCopied] = useState(false);
+  const [embedSnippetCopied, setEmbedSnippetCopied] = useState(false);
 
   const incomingRef = searchParams.get('ref');
   const isLoading = !campaign && !error;
@@ -325,6 +326,39 @@ export default function CampaignDetail({
                   </section>
                 ) : null}
               </div>
+
+              {campaign && (
+                <section className="section embed-section" style={{ marginTop: '32px', padding: '20px', background: 'var(--color-surface, #1e293b)', borderRadius: '8px', border: '1px solid var(--color-border, #334155)' }}>
+                  <h3 style={{ margin: '0 0 8px', fontSize: '1rem' }}>Embed this campaign</h3>
+                  <p style={{ margin: '0 0 12px', fontSize: '0.875rem', color: 'var(--color-text-secondary, #94a3b8)' }}>
+                    Copy this snippet to embed a live campaign card on any website.
+                  </p>
+                  <pre style={{ background: 'var(--color-bg, #0f172a)', padding: '12px', borderRadius: '6px', fontSize: '0.75rem', overflowX: 'auto', margin: '0 0 12px' }}>
+                    <code>{`<iframe
+  src="${window.location.origin}/embed/campaign/${id}?theme=dark"
+  width="400"
+  height="280"
+  frameborder="0"
+  style="border:none;border-radius:12px;"
+  title="${campaign.name ?? 'Campaign'} on Trivela"
+></iframe>`}</code>
+                  </pre>
+                  <button
+                    type="button"
+                    className="btn btn-secondary"
+                    style={{ fontSize: '0.8rem' }}
+                    onClick={() => {
+                      const snippet = `<iframe\n  src="${window.location.origin}/embed/campaign/${id}?theme=dark"\n  width="400"\n  height="280"\n  frameborder="0"\n  style="border:none;border-radius:12px;"\n  title="${campaign.name ?? 'Campaign'} on Trivela"\n></iframe>`;
+                      navigator.clipboard.writeText(snippet).then(() => {
+                        setEmbedSnippetCopied(true);
+                        setTimeout(() => setEmbedSnippetCopied(false), 2000);
+                      });
+                    }}
+                  >
+                    {embedSnippetCopied ? 'Copied!' : 'Copy snippet'}
+                  </button>
+                </section>
+              )}
             </article>
           )}
         </div>
@@ -338,3 +372,4 @@ export default function CampaignDetail({
     </div>
   );
 }
+

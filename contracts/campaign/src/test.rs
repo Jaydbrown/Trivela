@@ -1035,3 +1035,129 @@ fn test_repeat_registration_does_not_double_count_referral() {
     assert_eq!(client.referral_count(&referrer), 1);
     assert_eq!(client.referral_count(&other), 0);
 }
+
+// ── Activity log tests (issue #453) ──────────────────────────────────────────
+
+#[test]
+fn test_activity_log_records_registrations() {
+    let (env, _contract_id, client) = setup();
+    let admin = Address::generate(&env);
+    let p1 = Address::generate(&env);
+    let p2 = Address::generate(&env);
+    client.initialize(&admin);
+    env.mock_all_auths();
+    let (leaf, proof) = no_proof_args(&env);
+
+    assert!(client.register(&p1, &leaf, &proof, &None));
+    assert!(client.register(&p2, &leaf, &proof, &None));
+
+    let log = client.activity_log();
+    assert_eq!(log.len(), 2);
+    assert_eq!(log.get(0).unwrap().kind, ActivityKind::Register);
+    assert_eq!(log.get(0).unwrap().actor, p1);
+    assert_eq!(log.get(1).unwrap().kind, ActivityKind::Register);
+    assert_eq!(log.get(1).unwrap().actor, p2);
+}
+
+#[test]
+fn test_activity_log_ring_buffer_evicts_oldest() {
+    let (env, _contract_id, client) = setup();
+    let admin = Address::generate(&env);
+    client.initialize(&admin);
+    env.mock_all_auths();
+
+    // Set a small buffer size for testing
+    client.set_activity_log_size(&admin, &0, &10);
+    assert_eq!(client.get_activity_log_size(), 10);
+
+    let (leaf, proof) = no_proof_args(&env);
+
+    // Register 15 participants - should evict first 5
+    for _ in 0..15 {
+        let participant = Address::generate(&env);
+        client.register(&participant, &leaf, &proof, &None);
+    }
+
+    let log = client.activity_log();
+    assert_eq!(log.len(), 10); // Buffer capped at 10
+}
+
+#[test]
+fn test_activity_log_chronological_order() {
+    let (env, _contract_id, client) = setup();
+    let admin = Address::generate(&env);
+    
+    client.initialize(&admin);
+    env.mock_all_auths();
+    let (leaf, proof) = no_proof_args(&env);
+
+    // Register participants one by one, incrementing ledger
+    for i in 0..5 {
+        let p = Address::generate(&env);
+        env.ledger().with_mut(|li| li.sequence_number = i as u32);
+        client.register(&p, &leaf, &proof, &None);
+    }
+
+    let log = client.activity_log();
+    assert_eq!(log.len(), 5);
+    
+    // Verify chronological order (oldest first)
+    for i in 0..5 {
+        assert_eq!(log.get(i as u32).unwrap().ledger, i as u32);
+    }
+}
+
+#[test]
+fn test_set_activity_log_size_validates_range() {
+    let (env, _contract_id, client) = setup();
+    let admin = Address::generate(&env);
+    client.initialize(&admin);
+    env.mock_all_auths();
+
+    // Min boundary (10) - should succeed
+    client.set_activity_log_size(&admin, &0, &10);
+    
+    // Max boundary (200) - should succeed
+    client.set_activity_log_size(&admin, &1, &200);
+    
+    // Below min (9) - should fail
+    assert!(client.try_set_activity_log_size(&admin, &2, &9).is_err());
+    
+    // Above max (201) - should fail
+    assert!(client.try_set_activity_log_size(&admin, &3, &201).is_err());
+}
+
+#[test]
+fn test_set_activity_log_size_trims_existing_log() {
+    let (env, _contract_id, client) = setup();
+    let admin = Address::generate(&env);
+    client.initialize(&admin);
+    env.mock_all_auths();
+
+    let (leaf, proof) = no_proof_args(&env);
+
+    // Register 20 participants
+    for _ in 0..20 {
+        let participant = Address::generate(&env);
+        client.register(&participant, &leaf, &proof, &None);
+    }
+
+    let log = client.activity_log();
+    assert_eq!(log.len(), 20);
+
+    // Reduce size to 10 - should trim oldest 10 entries
+    client.set_activity_log_size(&admin, &0, &10);
+    
+    let trimmed_log = client.activity_log();
+    assert_eq!(trimmed_log.len(), 10);
+}
+
+#[test]
+fn test_activity_log_view_returns_empty_on_init() {
+    let (env, _contract_id, client) = setup();
+    let admin = Address::generate(&env);
+    client.initialize(&admin);
+    
+    let log = client.activity_log();
+    assert_eq!(log.len(), 0);
+}

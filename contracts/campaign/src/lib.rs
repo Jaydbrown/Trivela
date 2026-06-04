@@ -34,8 +34,8 @@
 #![no_std]
 
 use soroban_sdk::{
-    contract, contracterror, contractimpl, contractmeta, symbol_short, Address, Bytes, BytesN, Env,
-    Symbol, Vec,
+    contract, contracterror, contractimpl, contractmeta, contracttype, symbol_short, Address, Bytes, BytesN, Env,
+    Symbol, Vec, vec,
 };
 
 #[contracterror]
@@ -103,6 +103,34 @@ const REFERRAL: Symbol = symbol_short!("referral");
 const REFERRAL_COUNT: Symbol = symbol_short!("refcnt");
 const REFERRED_EVENT: Symbol = symbol_short!("referred");
 
+// ── Activity log ring buffer (issue #453) ────────────────────────────────────
+//
+// On-chain ring buffer of recent campaign events for light clients to verify
+// activity without running a full indexer. Stores the last N events in a
+// fixed-size vector that evicts oldest entries when full.
+const ACTIVITY_LOG: Symbol = symbol_short!("actlog");
+const ACTIVITY_LOG_SIZE: Symbol = symbol_short!("actsize");
+const DEFAULT_ACTIVITY_LOG_SIZE: u32 = 50;
+const MIN_ACTIVITY_LOG_SIZE: u32 = 10;
+const MAX_ACTIVITY_LOG_SIZE: u32 = 200;
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[contracttype]
+pub enum ActivityKind {
+    Register,
+    Credit,
+    Claim,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[contracttype]
+pub struct ActivityEntry {
+    pub kind: ActivityKind,
+    pub actor: Address,
+    pub amount: Option<u64>,
+    pub ledger: u32,
+}
+
 // #280 — TTL thresholds for the per-participant persistent storage
 // entries. Values are deliberately modest in this initial migration:
 // every register call refreshes its own key without taking on the
@@ -144,6 +172,36 @@ fn verify_merkle_proof(
         computed = hash_pair(env, computed, sibling);
     }
     &computed == root
+}
+
+/// Append an activity entry to the ring buffer, evicting oldest if full.
+fn log_activity(env: &Env, kind: ActivityKind, actor: Address, amount: Option<u64>) {
+    let max_size: u32 = env
+        .storage()
+        .instance()
+        .get(&ACTIVITY_LOG_SIZE)
+        .unwrap_or(DEFAULT_ACTIVITY_LOG_SIZE);
+    
+    let mut log: Vec<ActivityEntry> = env
+        .storage()
+        .instance()
+        .get(&ACTIVITY_LOG)
+        .unwrap_or_else(|| vec![env]);
+    
+    let entry = ActivityEntry {
+        kind,
+        actor,
+        amount,
+        ledger: env.ledger().sequence(),
+    };
+    
+    // If buffer is at max size, remove oldest entry (first element)
+    if log.len() >= max_size {
+        log.remove(0);
+    }
+    
+    log.push_back(entry);
+    env.storage().instance().set(&ACTIVITY_LOG, &log);
 }
 
 fn require_admin_with_nonce(env: &Env, admin: &Address, nonce: u64) -> Result<(), Error> {
@@ -415,6 +473,9 @@ impl CampaignContract {
         env.events()
             .publish((REGISTER_EVENT, participant.clone()), ());
 
+        // Log the registration to the activity ring buffer (issue #453)
+        log_activity(&env, ActivityKind::Register, participant.clone(), None);
+
         // Record the referral edge and bump the referrer's tally (issue #455).
         // Only reached on first-time registration with a validated referrer.
         if let Some(referrer) = referrer {
@@ -599,6 +660,54 @@ impl CampaignContract {
         env.storage().instance().remove(&PENDING_ADMIN);
         env.storage().instance().extend_ttl(TTL_THRESHOLD, TTL_EXTEND_TO);
         Ok(())
+    }
+
+    // ── Activity log (issue #453) ────────────────────────────────────────────
+
+    /// Return the activity log ring buffer in chronological order (oldest first).
+    pub fn activity_log(env: Env) -> Vec<ActivityEntry> {
+        env.storage()
+            .instance()
+            .get(&ACTIVITY_LOG)
+            .unwrap_or_else(|| vec![&env])
+    }
+
+    /// Set the maximum size of the activity log ring buffer (admin only).
+    /// Must be between MIN_ACTIVITY_LOG_SIZE (10) and MAX_ACTIVITY_LOG_SIZE (200).
+    pub fn set_activity_log_size(
+        env: Env,
+        admin: Address,
+        nonce: u64,
+        size: u32,
+    ) -> Result<(), Error> {
+        require_admin_with_nonce(&env, &admin, nonce)?;
+        if size < MIN_ACTIVITY_LOG_SIZE || size > MAX_ACTIVITY_LOG_SIZE {
+            return Err(Error::Unauthorized); // Reuse error code for invalid range
+        }
+        
+        // If reducing size, trim the log to fit
+        let mut log: Vec<ActivityEntry> = env
+            .storage()
+            .instance()
+            .get(&ACTIVITY_LOG)
+            .unwrap_or_else(|| vec![&env]);
+        
+        while log.len() > size {
+            log.remove(0);
+        }
+        
+        env.storage().instance().set(&ACTIVITY_LOG, &log);
+        env.storage().instance().set(&ACTIVITY_LOG_SIZE, &size);
+        env.storage().instance().extend_ttl(TTL_THRESHOLD, TTL_EXTEND_TO);
+        Ok(())
+    }
+
+    /// Get the configured activity log buffer size.
+    pub fn get_activity_log_size(env: Env) -> u32 {
+        env.storage()
+            .instance()
+            .get(&ACTIVITY_LOG_SIZE)
+            .unwrap_or(DEFAULT_ACTIVITY_LOG_SIZE)
     }
 }
 

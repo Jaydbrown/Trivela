@@ -101,7 +101,7 @@ async function injectMockFreighter(page: Page, publicKey: string, secretKey: str
       window.freighterInstalled = true;
       console.log('[Mock Freighter] Wallet mock installed for:', pk);
     },
-    { publicKey: publicKey, secretKey: secretKey }
+    { publicKey: publicKey, secretKey: secretKey },
   );
 }
 
@@ -137,8 +137,10 @@ test.describe('Campaign Lifecycle E2E', () => {
 
     // Get or create test API key (in real scenario, created beforehand)
     adminApiKey = process.env.TEST_ADMIN_API_KEY || 'test-admin-key-12345';
-    testUserPublicKey = process.env.TEST_USER_ACCOUNT || 'GBUQWP3BOUZX34ULNQG23RQ6F4IKCNPPD7GBL3UQBGQKBV2K6NRLB3Z';
-    testUserSecretKey = process.env.TEST_USER_SECRET || 'SBKF2BLG3VVQHJFMPYJ7GQLM5S2U5JYQOABQV32AAZBBJT3NZ2FA46';
+    testUserPublicKey =
+      process.env.TEST_USER_ACCOUNT || 'GBUQWP3BOUZX34ULNQG23RQ6F4IKCNPPD7GBL3UQBGQKBV2K6NRLB3Z';
+    testUserSecretKey =
+      process.env.TEST_USER_SECRET || 'SBKF2BLG3VVQHJFMPYJ7GQLM5S2U5JYQOABQV32AAZBBJT3NZ2FA46';
   });
 
   test('step 1: admin creates a campaign', async () => {
@@ -203,9 +205,11 @@ test.describe('Campaign Lifecycle E2E', () => {
       // Verify wallet is connected
       // Should show public key or "Connected" status
       const walletStatus = page.getByText(new RegExp(testUserPublicKey.slice(0, 4), 'i'));
-      await expect(walletStatus).toBeVisible({ timeout: 5_000 }).catch(() => {
-        console.warn('⚠️ Wallet connection status not visible - may be part of next step');
-      });
+      await expect(walletStatus)
+        .toBeVisible({ timeout: 5_000 })
+        .catch(() => {
+          console.warn('⚠️ Wallet connection status not visible - may be part of next step');
+        });
 
       console.log(`✓ Wallet connected: ${testUserPublicKey.slice(0, 4)}...`);
     } else {
@@ -227,9 +231,11 @@ test.describe('Campaign Lifecycle E2E', () => {
 
     // Verify tags are displayed
     for (const tag of TEST_CAMPAIGN.tags) {
-      await expect(page.getByText(tag)).toBeVisible({ timeout: 5_000 }).catch(() => {
-        console.warn(`⚠️ Tag not found: ${tag}`);
-      });
+      await expect(page.getByText(tag))
+        .toBeVisible({ timeout: 5_000 })
+        .catch(() => {
+          console.warn(`⚠️ Tag not found: ${tag}`);
+        });
     }
 
     console.log(`✓ Campaign details verified`);
@@ -306,14 +312,14 @@ test.describe('Campaign Lifecycle - Integration Notes', () => {
   test.skip('contract deployment step (requires Rust/soroban-cli)', async () => {
     // This step would be implemented when contract deployment is needed
     // For now, contract IDs should be created beforehand and linked via API
-    
+
     // Expected flow:
     // 1. Deploy campaign contract to testnet
     // 2. Deploy rewards contract to testnet
     // 3. Call campaign.initialize() with required params
     // 4. Call rewards.initialize() with campaign contract address
     // 5. Link contract IDs to campaign via PUT /api/v1/campaigns/:id
-    
+
     console.log('✓ Contract deployment would go here');
   });
 

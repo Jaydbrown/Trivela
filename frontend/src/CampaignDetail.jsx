@@ -25,16 +25,8 @@ export default function CampaignDetail({
 }) {
   const { id } = useParams();
   const [searchParams] = useSearchParams();
-  const {
-    campaign,
-    onChainState,
-    isPolling,
-    isPaused,
-    lastUpdated,
-    stateToast,
-    error,
-    refresh,
-  } = useCampaignPolling({ campaignId: id, enabled: Boolean(id) });
+  const { campaign, onChainState, isPolling, isPaused, lastUpdated, stateToast, error, refresh } =
+    useCampaignPolling({ campaignId: id, enabled: Boolean(id) });
 
   const [referralCount, setReferralCount] = useState(0);
   const [bonusEarned, setBonusEarned] = useState(0);
@@ -146,10 +138,17 @@ export default function CampaignDetail({
                   Live
                 </span>
               ) : null}
-              <button type="button" className="btn btn-secondary detail-refresh-btn" onClick={refresh}>
+              <button
+                type="button"
+                className="btn btn-secondary detail-refresh-btn"
+                onClick={refresh}
+              >
                 {isPolling ? 'Refreshing...' : 'Refresh'}
               </button>
-              <Link to={`/campaign/${id}/leaderboard`} className="btn btn-secondary detail-leaderboard-btn">
+              <Link
+                to={`/campaign/${id}/leaderboard`}
+                className="btn btn-secondary detail-leaderboard-btn"
+              >
                 View leaderboard
               </Link>
             </div>
@@ -256,7 +255,8 @@ export default function CampaignDetail({
                       <h3 className="referral-title">Invite Friends</h3>
                       {campaign.referralBonusPoints > 0 ? (
                         <p className="referral-bonus-note">
-                          Earn <strong>+{campaign.referralBonusPoints} bonus pts</strong> per friend who registers
+                          Earn <strong>+{campaign.referralBonusPoints} bonus pts</strong> per friend
+                          who registers
                         </p>
                       ) : null}
                     </div>
@@ -295,7 +295,11 @@ export default function CampaignDetail({
                       </button>
                     </div>
 
-                    <div className="referral-share-row" role="group" aria-label="Share on social media">
+                    <div
+                      className="referral-share-row"
+                      role="group"
+                      aria-label="Share on social media"
+                    >
                       <a
                         href={`https://twitter.com/intent/tweet?text=${buildShareText()}`}
                         target="_blank"
@@ -328,12 +332,36 @@ export default function CampaignDetail({
               </div>
 
               {campaign && (
-                <section className="section embed-section" style={{ marginTop: '32px', padding: '20px', background: 'var(--color-surface, #1e293b)', borderRadius: '8px', border: '1px solid var(--color-border, #334155)' }}>
+                <section
+                  className="section embed-section"
+                  style={{
+                    marginTop: '32px',
+                    padding: '20px',
+                    background: 'var(--color-surface, #1e293b)',
+                    borderRadius: '8px',
+                    border: '1px solid var(--color-border, #334155)',
+                  }}
+                >
                   <h3 style={{ margin: '0 0 8px', fontSize: '1rem' }}>Embed this campaign</h3>
-                  <p style={{ margin: '0 0 12px', fontSize: '0.875rem', color: 'var(--color-text-secondary, #94a3b8)' }}>
+                  <p
+                    style={{
+                      margin: '0 0 12px',
+                      fontSize: '0.875rem',
+                      color: 'var(--color-text-secondary, #94a3b8)',
+                    }}
+                  >
                     Copy this snippet to embed a live campaign card on any website.
                   </p>
-                  <pre style={{ background: 'var(--color-bg, #0f172a)', padding: '12px', borderRadius: '6px', fontSize: '0.75rem', overflowX: 'auto', margin: '0 0 12px' }}>
+                  <pre
+                    style={{
+                      background: 'var(--color-bg, #0f172a)',
+                      padding: '12px',
+                      borderRadius: '6px',
+                      fontSize: '0.75rem',
+                      overflowX: 'auto',
+                      margin: '0 0 12px',
+                    }}
+                  >
                     <code>{`<iframe
   src="${window.location.origin}/embed/campaign/${id}?theme=dark"
   width="400"
@@ -372,4 +400,3 @@ export default function CampaignDetail({
     </div>
   );
 }
-

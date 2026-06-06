@@ -12,13 +12,7 @@ import EmptyState from './components/EmptyState';
 import { logSafeEvent } from './lib/safeAnalytics';
 import OnboardingTour, { useRestartTour } from './components/OnboardingTour';
 
-const VALID_SORT_KEYS = new Set([
-  'newest',
-  'oldest',
-  'name_asc',
-  'name_desc',
-  'reward_desc',
-]);
+const VALID_SORT_KEYS = new Set(['newest', 'oldest', 'name_asc', 'name_desc', 'reward_desc']);
 
 function normalizeSortKey(raw) {
   return VALID_SORT_KEYS.has(raw) ? raw : 'newest';
@@ -126,7 +120,7 @@ export default function Landing({
       })
       .then((payload) => {
         if (controller.signal.aborted) return;
-        const items = Array.isArray(payload) ? payload : (payload.data ?? payload.campaigns ?? []);
+        const items = Array.isArray(payload) ? payload : payload.data ?? payload.campaigns ?? [];
         logSafeEvent('campaigns_list_loaded', { count: items.length });
         const nextPagination = Array.isArray(payload)
           ? getFallbackPagination(items, campaignPage)
@@ -251,7 +245,9 @@ export default function Landing({
 
             <div className="rewards-balance" aria-live="polite">
               <span className="rewards-balance-label">Available points</span>
-              <strong data-tour="rewards">{isRewardsPointsLoading ? '…' : rewardsPoints || '—'}</strong>
+              <strong data-tour="rewards">
+                {isRewardsPointsLoading ? '…' : rewardsPoints || '—'}
+              </strong>
             </div>
 
             <div className="rewards-actions">
@@ -446,7 +442,11 @@ export default function Landing({
           </div>
         </section>
 
-        <section className="section campaigns-preview" aria-labelledby="campaigns-title" data-tour="campaigns">
+        <section
+          className="section campaigns-preview"
+          aria-labelledby="campaigns-title"
+          data-tour="campaigns"
+        >
           <h2 id="campaigns-title" className="section-title">
             Live campaigns
           </h2>
@@ -473,9 +473,7 @@ export default function Landing({
 
           {!isCampaignsLoading && !campaignsError && (
             <p className="campaign-result-count" aria-live="polite">
-              {totalCampaigns === 1
-                ? '1 campaign'
-                : `${totalCampaigns} campaigns`}
+              {totalCampaigns === 1 ? '1 campaign' : `${totalCampaigns} campaigns`}
               {hasActiveFilters ? ' matching your filters' : ''}
             </p>
           )}
@@ -626,7 +624,15 @@ export default function Landing({
             type="button"
             className="footer-restart-tour"
             onClick={restart}
-            style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--color-text-secondary, #94a3b8)', fontSize: '0.8rem', textDecoration: 'underline', padding: 0 }}
+            style={{
+              background: 'none',
+              border: 'none',
+              cursor: 'pointer',
+              color: 'var(--color-text-secondary, #94a3b8)',
+              fontSize: '0.8rem',
+              textDecoration: 'underline',
+              padding: 0,
+            }}
           >
             Restart Tour
           </button>
@@ -636,4 +642,3 @@ export default function Landing({
     </div>
   );
 }
-

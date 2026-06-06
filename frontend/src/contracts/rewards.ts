@@ -30,9 +30,10 @@ export class AssembledTransaction<T> {
     public parseResult: (val: any) => T,
   ) {
     this.server = new rpc.Server(options.rpcUrl, { allowHttp: options.allowHttp });
-    const sourcePublicKey = options.publicKey || 'GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHB';
+    const sourcePublicKey =
+      options.publicKey || 'GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHB';
     const contract = new Contract(options.contractId);
-    
+
     const dummyAccount = new rpc.Server.Account(sourcePublicKey, '0');
     this.tx = new TransactionBuilder(dummyAccount, {
       fee: BASE_FEE,
@@ -57,7 +58,7 @@ export class AssembledTransaction<T> {
     const sim = await this.server.simulateTransaction(this.tx);
     if (sim.error) throw new Error(sim.error);
     const preparedTx = rpc.assembleTransaction(this.tx, sim).build();
-    
+
     const { signedTxXdr } = await this.options.signTransaction(preparedTx.toXDR());
     this.signed = TransactionBuilder.fromXDR(signedTxXdr, this.options.networkPassphrase);
     return this;
@@ -108,29 +109,51 @@ export class Client {
       this.options,
       'balance',
       [nativeToScVal(Address.fromString(user))],
-      (val) => scValToNative(val)
+      (val) => scValToNative(val),
     );
   }
 
-  async claim({ user, amount }: { user: string; amount: bigint }): Promise<AssembledTransaction<bigint>> {
+  async claim({
+    user,
+    amount,
+  }: {
+    user: string;
+    amount: bigint;
+  }): Promise<AssembledTransaction<bigint>> {
     return new AssembledTransaction(
       this.options,
       'claim',
       [nativeToScVal(Address.fromString(user)), nativeToScVal(amount, { type: 'u64' })],
-      (val) => scValToNative(val)
+      (val) => scValToNative(val),
     );
   }
 
-  async get_tier_for_rank({ rank, campaign_id }: { rank: bigint; campaign_id: bigint }): Promise<AssembledTransaction<bigint>> {
+  async get_tier_for_rank({
+    rank,
+    campaign_id,
+  }: {
+    rank: bigint;
+    campaign_id: bigint;
+  }): Promise<AssembledTransaction<bigint>> {
     return new AssembledTransaction(
       this.options,
       'get_tier_for_rank',
       [nativeToScVal(rank, { type: 'u64' }), nativeToScVal(campaign_id, { type: 'u64' })],
-      (val) => scValToNative(val)
+      (val) => scValToNative(val),
     );
   }
 
-  async credit_by_rank({ admin, user, rank, campaign_id }: { admin: string; user: string; rank: bigint; campaign_id: bigint }): Promise<AssembledTransaction<bigint>> {
+  async credit_by_rank({
+    admin,
+    user,
+    rank,
+    campaign_id,
+  }: {
+    admin: string;
+    user: string;
+    rank: bigint;
+    campaign_id: bigint;
+  }): Promise<AssembledTransaction<bigint>> {
     return new AssembledTransaction(
       this.options,
       'credit_by_rank',
@@ -138,9 +161,9 @@ export class Client {
         nativeToScVal(Address.fromString(admin)),
         nativeToScVal(Address.fromString(user)),
         nativeToScVal(rank, { type: 'u64' }),
-        nativeToScVal(campaign_id, { type: 'u64' })
+        nativeToScVal(campaign_id, { type: 'u64' }),
       ],
-      (val) => scValToNative(val)
+      (val) => scValToNative(val),
     );
   }
 }

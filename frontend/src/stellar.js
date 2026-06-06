@@ -347,7 +347,7 @@ export async function getCampaignAdminNonce(contractId) {
  */
 export async function setCampaignActive(walletAddress, contractId, active) {
   const nonce = await getCampaignAdminNonce(contractId);
-  
+
   const client = new CampaignClient({
     rpcUrl: getSorobanRpcUrl(),
     networkPassphrase: getNetworkPassphrase(),
@@ -365,7 +365,7 @@ export async function setCampaignActive(walletAddress, contractId, active) {
   const tx = await client.set_active({
     admin: walletAddress,
     nonce,
-    active
+    active,
   });
 
   await tx.signAndSend();
@@ -378,7 +378,7 @@ export async function setCampaignActive(walletAddress, contractId, active) {
  */
 export async function setCampaignWindow(walletAddress, contractId, startTime, endTime) {
   const nonce = await getCampaignAdminNonce(contractId);
-  
+
   const client = new CampaignClient({
     rpcUrl: getSorobanRpcUrl(),
     networkPassphrase: getNetworkPassphrase(),
@@ -397,7 +397,7 @@ export async function setCampaignWindow(walletAddress, contractId, startTime, en
     admin: walletAddress,
     nonce,
     start: BigInt(startTime),
-    end: BigInt(endTime)
+    end: BigInt(endTime),
   });
 
   await tx.signAndSend();
@@ -410,7 +410,7 @@ export async function setCampaignWindow(walletAddress, contractId, startTime, en
  */
 export async function setCampaignMaxCap(walletAddress, contractId, maxCap) {
   const nonce = await getCampaignAdminNonce(contractId);
-  
+
   const client = new CampaignClient({
     rpcUrl: getSorobanRpcUrl(),
     networkPassphrase: getNetworkPassphrase(),
@@ -428,7 +428,7 @@ export async function setCampaignMaxCap(walletAddress, contractId, maxCap) {
   const tx = await client.set_max_cap({
     admin: walletAddress,
     nonce,
-    max_cap: BigInt(maxCap)
+    max_cap: BigInt(maxCap),
   });
 
   await tx.signAndSend();
@@ -441,7 +441,7 @@ export async function setCampaignMaxCap(walletAddress, contractId, maxCap) {
  */
 export async function setCampaignMerkleRoot(walletAddress, contractId, merkleRoot) {
   const nonce = await getCampaignAdminNonce(contractId);
-  
+
   const client = new CampaignClient({
     rpcUrl: getSorobanRpcUrl(),
     networkPassphrase: getNetworkPassphrase(),
@@ -459,7 +459,7 @@ export async function setCampaignMerkleRoot(walletAddress, contractId, merkleRoo
   const tx = await client.set_merkle_root({
     admin: walletAddress,
     nonce,
-    root: merkleRoot
+    root: merkleRoot,
   });
 
   await tx.signAndSend();

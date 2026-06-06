@@ -138,16 +138,9 @@ export default function EmbedCampaign() {
       <div style={styles.meta}>
         <span>{participantCount.toLocaleString()} participants</span>
         {capacity != null && <span>of {capacity.toLocaleString()}</span>}
-        {campaign.rewardPerAction != null && (
-          <span>{campaign.rewardPerAction} pts/action</span>
-        )}
+        {campaign.rewardPerAction != null && <span>{campaign.rewardPerAction} pts/action</span>}
       </div>
-      <a
-        href={campaignUrl}
-        target="_blank"
-        rel="noopener noreferrer"
-        style={styles.btn}
-      >
+      <a href={campaignUrl} target="_blank" rel="noopener noreferrer" style={styles.btn}>
         Register on Trivela
       </a>
     </div>

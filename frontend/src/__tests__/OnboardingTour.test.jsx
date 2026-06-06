@@ -49,7 +49,12 @@ describe('OnboardingTour', () => {
     let onDestroyedCallback;
     driver.mockImplementation((config) => {
       onDestroyedCallback = config.onDestroyed;
-      return { drive: mockDrive, destroy: mockDestroy, moveNext: mockMoveNext, movePrevious: mockMovePrevious };
+      return {
+        drive: mockDrive,
+        destroy: mockDestroy,
+        moveNext: mockMoveNext,
+        movePrevious: mockMovePrevious,
+      };
     });
 
     render(<OnboardingTour />);

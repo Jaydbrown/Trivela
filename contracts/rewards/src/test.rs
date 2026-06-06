@@ -295,7 +295,7 @@ fn test_campaign_rewards_integration_flow() {
     //    any further reads.
     let dummy_leaf: BytesN<32> = BytesN::from_array(&env, &[0u8; 32]);
     let empty_proof: SdkVec<BytesN<32>> = SdkVec::new(&env);
-    assert!(campaign.register(&user, &dummy_leaf, &empty_proof));
+    assert!(campaign.register(&user, &dummy_leaf, &empty_proof, &None));
     assert_eq!(
         env.events().all(),
         vec![
@@ -381,8 +381,8 @@ fn test_campaign_rewards_integration_multi_user() {
     let empty_proof: SdkVec<BytesN<32>> = SdkVec::new(&env);
 
     // Both users register.
-    assert!(campaign.register(&alice, &dummy_leaf, &empty_proof));
-    assert!(campaign.register(&bob, &dummy_leaf, &empty_proof));
+    assert!(campaign.register(&alice, &dummy_leaf, &empty_proof, &None));
+    assert!(campaign.register(&bob, &dummy_leaf, &empty_proof, &None));
     assert_eq!(campaign.get_participant_count(), 2);
 
     // Configure a 1.5x multiplier for campaign 7 and credit Alice through it.
@@ -467,7 +467,7 @@ fn test_campaign_window_gates_rewards_flow() {
     env.ledger().with_mut(|li| li.timestamp = 500);
     assert!(!campaign.is_within_window());
     assert_eq!(
-        campaign.try_register(&user, &dummy_leaf, &empty_proof),
+        campaign.try_register(&user, &dummy_leaf, &empty_proof, &None),
         Err(Ok(CampaignError::OutsideTimeWindow))
     );
     assert!(!campaign.is_participant(&user));
@@ -475,7 +475,7 @@ fn test_campaign_window_gates_rewards_flow() {
     // Inside the window, registration succeeds and the rewards flow runs.
     env.ledger().with_mut(|li| li.timestamp = 1_500);
     assert!(campaign.is_within_window());
-    assert!(campaign.register(&user, &dummy_leaf, &empty_proof));
+    assert!(campaign.register(&user, &dummy_leaf, &empty_proof, &None));
     rewards.credit(&admin, &user, &200);
     rewards.claim(&user, &50);
 
@@ -491,7 +491,7 @@ fn test_campaign_window_gates_rewards_flow() {
     // rejected, even though the campaign is otherwise active.
     let latecomer = Address::generate(&env);
     assert_eq!(
-        campaign.try_register(&latecomer, &dummy_leaf, &empty_proof),
+        campaign.try_register(&latecomer, &dummy_leaf, &empty_proof, &None),
         Err(Ok(CampaignError::OutsideTimeWindow))
     );
     assert_eq!(campaign.get_participant_count(), 1);

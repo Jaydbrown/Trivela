@@ -58,7 +58,7 @@ test.describe('Cross-browser compatibility', () => {
       expect(bbox?.height).toBeGreaterThan(0);
 
       console.log(
-        `✓ [${browserName}] Campaign grid rendered correctly (${bbox?.width}x${bbox?.height}px)`
+        `✓ [${browserName}] Campaign grid rendered correctly (${bbox?.width}x${bbox?.height}px)`,
       );
     } else {
       console.log(`ℹ️ [${browserName}] Campaign grid empty or not visible`);
@@ -74,9 +74,11 @@ test.describe('Cross-browser compatibility', () => {
     console.log(`ℹ️ [${browserName}] Initial theme: ${initialTheme}`);
 
     // Look for theme toggle button
-    const themeToggle = page.getByRole('button', {
-      name: /theme|dark|light|toggle/i,
-    }).first();
+    const themeToggle = page
+      .getByRole('button', {
+        name: /theme|dark|light|toggle/i,
+      })
+      .first();
 
     if (await themeToggle.isVisible({ timeout: 3000 }).catch(() => false)) {
       // Click theme toggle
@@ -137,9 +139,7 @@ test.describe('Cross-browser compatibility', () => {
     const desktopGrid = page.locator('.campaigns-grid');
     if (await desktopGrid.isVisible({ timeout: 10_000 }).catch(() => false)) {
       const desktopBbox = await desktopGrid.boundingBox();
-      console.log(
-        `✓ [${browserName}] Desktop (1920x1080): grid width ${desktopBbox?.width}px`
-      );
+      console.log(`✓ [${browserName}] Desktop (1920x1080): grid width ${desktopBbox?.width}px`);
     }
 
     // Test tablet viewport
@@ -157,9 +157,7 @@ test.describe('Cross-browser compatibility', () => {
 
     if (await desktopGrid.isVisible({ timeout: 5000 }).catch(() => false)) {
       const mobileBbox = await desktopGrid.boundingBox();
-      console.log(
-        `✓ [${browserName}] Mobile (375x667): grid width ${mobileBbox?.width}px`
-      );
+      console.log(`✓ [${browserName}] Mobile (375x667): grid width ${mobileBbox?.width}px`);
     }
   });
 
@@ -230,7 +228,9 @@ test.describe('Cross-browser compatibility', () => {
       return window.matchMedia('(prefers-color-scheme: light)').matches;
     });
 
-    console.log(`ℹ️ [${browserName}] prefers-color-scheme - dark: ${prefersDark}, light: ${prefersLight}`);
+    console.log(
+      `ℹ️ [${browserName}] prefers-color-scheme - dark: ${prefersDark}, light: ${prefersLight}`,
+    );
     expect(prefersDark || prefersLight).toBe(true);
 
     // Test device pixel ratio

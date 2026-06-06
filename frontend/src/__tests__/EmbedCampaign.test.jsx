@@ -29,10 +29,13 @@ function renderEmbed(id = 'abc123', search = '') {
 
 describe('EmbedCampaign', () => {
   beforeEach(() => {
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
-      ok: true,
-      json: () => Promise.resolve({ campaign: mockCampaign }),
-    }));
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve({ campaign: mockCampaign }),
+      }),
+    );
   });
 
   afterEach(() => {
@@ -40,7 +43,10 @@ describe('EmbedCampaign', () => {
   });
 
   it('shows loading state initially', () => {
-    vi.stubGlobal('fetch', vi.fn(() => new Promise(() => {})));
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() => new Promise(() => {})),
+    );
     renderEmbed();
     expect(screen.getByText(/loading/i)).toBeInTheDocument();
   });
@@ -73,10 +79,13 @@ describe('EmbedCampaign', () => {
 
   it('truncates long descriptions', async () => {
     const longDesc = 'A'.repeat(200);
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
-      ok: true,
-      json: () => Promise.resolve({ campaign: { ...mockCampaign, description: longDesc } }),
-    }));
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve({ campaign: { ...mockCampaign, description: longDesc } }),
+      }),
+    );
     renderEmbed();
     await waitFor(() => {
       const desc = screen.getByText(/A+\u2026/);

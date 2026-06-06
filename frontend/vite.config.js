@@ -40,7 +40,11 @@ export default defineConfig({
         maximumFileSizeToCacheInBytes: 3_000_000,
         runtimeCaching: [
           {
-            urlPattern: ({ request }) => request.destination === 'script' || request.destination === 'style' || request.destination === 'image' || request.destination === 'font',
+            urlPattern: ({ request }) =>
+              request.destination === 'script' ||
+              request.destination === 'style' ||
+              request.destination === 'image' ||
+              request.destination === 'font',
             handler: 'CacheFirst',
             options: {
               cacheName: 'static-assets',

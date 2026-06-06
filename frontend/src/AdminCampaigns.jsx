@@ -96,7 +96,10 @@ export default function AdminCampaigns({
               <ul className="admin-analytics-list">
                 {campaigns.map((campaign) => (
                   <li key={campaign.id}>
-                    <Link to={`/admin/campaigns/${campaign.id}/analytics`} className="admin-analytics-link">
+                    <Link
+                      to={`/admin/campaigns/${campaign.id}/analytics`}
+                      className="admin-analytics-link"
+                    >
                       {campaign.name}
                     </Link>
                   </li>
@@ -130,23 +133,24 @@ export default function AdminCampaigns({
                 >
                   <option value="">Choose a campaign...</option>
                   {campaigns
-                    .filter(campaign => campaign.contractId)
+                    .filter((campaign) => campaign.contractId)
                     .map((campaign) => (
                       <option key={campaign.id} value={campaign.id}>
                         {campaign.name} ({campaign.contractId})
                       </option>
                     ))}
                 </select>
-                {campaigns.filter(c => c.contractId).length === 0 && (
+                {campaigns.filter((c) => c.contractId).length === 0 && (
                   <small className="campaign-selector-hint">
-                    No campaigns with contract IDs found. Create a campaign with a contract ID first.
+                    No campaigns with contract IDs found. Create a campaign with a contract ID
+                    first.
                   </small>
                 )}
               </div>
 
               {selectedCampaignId && (
-                <AdminControlPanel 
-                  contractId={campaigns.find(c => c.id === selectedCampaignId)?.contractId}
+                <AdminControlPanel
+                  contractId={campaigns.find((c) => c.id === selectedCampaignId)?.contractId}
                 />
               )}
             </section>

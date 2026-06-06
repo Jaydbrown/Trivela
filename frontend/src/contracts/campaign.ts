@@ -30,9 +30,10 @@ export class AssembledTransaction<T> {
     public parseResult: (val: any) => T,
   ) {
     this.server = new rpc.Server(options.rpcUrl, { allowHttp: options.allowHttp });
-    const sourcePublicKey = options.publicKey || 'GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHB';
+    const sourcePublicKey =
+      options.publicKey || 'GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHB';
     const contract = new Contract(options.contractId);
-    
+
     const dummyAccount = new rpc.Server.Account(sourcePublicKey, '0');
     this.tx = new TransactionBuilder(dummyAccount, {
       fee: BASE_FEE,
@@ -57,7 +58,7 @@ export class AssembledTransaction<T> {
     const sim = await this.server.simulateTransaction(this.tx);
     if (sim.error) throw new Error(sim.error);
     const preparedTx = rpc.assembleTransaction(this.tx, sim).build();
-    
+
     const { signedTxXdr } = await this.options.signTransaction(preparedTx.toXDR());
     this.signed = TransactionBuilder.fromXDR(signedTxXdr, this.options.networkPassphrase);
     return this;
@@ -108,68 +109,106 @@ export class Client {
       this.options,
       'initialize',
       [nativeToScVal(Address.fromString(admin))],
-      () => null
+      () => null,
     );
   }
 
-  async is_participant({ participant }: { participant: string }): Promise<AssembledTransaction<boolean>> {
+  async is_participant({
+    participant,
+  }: {
+    participant: string;
+  }): Promise<AssembledTransaction<boolean>> {
     return new AssembledTransaction(
       this.options,
       'is_participant',
       [nativeToScVal(Address.fromString(participant))],
-      (val) => scValToNative(val)
+      (val) => scValToNative(val),
     );
   }
 
-  async register({ participant, leaf, proof }: { participant: string; leaf: Uint8Array; proof: Uint8Array[] }): Promise<AssembledTransaction<boolean>> {
+  async register({
+    participant,
+    leaf,
+    proof,
+  }: {
+    participant: string;
+    leaf: Uint8Array;
+    proof: Uint8Array[];
+  }): Promise<AssembledTransaction<boolean>> {
     return new AssembledTransaction(
       this.options,
       'register',
-      [
-        nativeToScVal(Address.fromString(participant)),
-        nativeToScVal(leaf),
-        nativeToScVal(proof)
-      ],
-      (val) => scValToNative(val)
+      [nativeToScVal(Address.fromString(participant)), nativeToScVal(leaf), nativeToScVal(proof)],
+      (val) => scValToNative(val),
     );
   }
 
-  async deregister({ participant }: { participant: string }): Promise<AssembledTransaction<boolean>> {
+  async deregister({
+    participant,
+  }: {
+    participant: string;
+  }): Promise<AssembledTransaction<boolean>> {
     return new AssembledTransaction(
       this.options,
       'deregister',
       [nativeToScVal(Address.fromString(participant))],
-      (val) => scValToNative(val)
+      (val) => scValToNative(val),
     );
   }
 
-  async admin_deregister({ admin, nonce, participant }: { admin: string; nonce: bigint; participant: string }): Promise<AssembledTransaction<boolean>> {
+  async admin_deregister({
+    admin,
+    nonce,
+    participant,
+  }: {
+    admin: string;
+    nonce: bigint;
+    participant: string;
+  }): Promise<AssembledTransaction<boolean>> {
     return new AssembledTransaction(
       this.options,
       'admin_deregister',
       [
         nativeToScVal(Address.fromString(admin)),
         nativeToScVal(nonce, { type: 'u64' }),
-        nativeToScVal(Address.fromString(participant))
+        nativeToScVal(Address.fromString(participant)),
       ],
-      (val) => scValToNative(val)
+      (val) => scValToNative(val),
     );
   }
 
-  async set_active({ admin, nonce, active }: { admin: string; nonce: bigint; active: boolean }): Promise<AssembledTransaction<null>> {
+  async set_active({
+    admin,
+    nonce,
+    active,
+  }: {
+    admin: string;
+    nonce: bigint;
+    active: boolean;
+  }): Promise<AssembledTransaction<null>> {
     return new AssembledTransaction(
       this.options,
       'set_active',
       [
         nativeToScVal(Address.fromString(admin)),
         nativeToScVal(nonce, { type: 'u64' }),
-        nativeToScVal(active)
+        nativeToScVal(active),
       ],
-      () => null
+      () => null,
     );
   }
 
-  async set_window({ admin, nonce, start, end }: { admin: string; nonce: bigint; start: bigint; end: bigint }): Promise<AssembledTransaction<null>> {
+  async set_window({
+    admin,
+    nonce,
+    start,
+    end,
+  }: {
+    admin: string;
+    nonce: bigint;
+    start: bigint;
+    end: bigint;
+  }): Promise<AssembledTransaction<null>> {
     return new AssembledTransaction(
       this.options,
       'set_window',
@@ -177,98 +216,85 @@ export class Client {
         nativeToScVal(Address.fromString(admin)),
         nativeToScVal(nonce, { type: 'u64' }),
         nativeToScVal(start, { type: 'u64' }),
-        nativeToScVal(end, { type: 'u64' })
+        nativeToScVal(end, { type: 'u64' }),
       ],
-      () => null
+      () => null,
     );
   }
 
-  async set_max_cap({ admin, nonce, max_cap }: { admin: string; nonce: bigint; max_cap: bigint }): Promise<AssembledTransaction<null>> {
+  async set_max_cap({
+    admin,
+    nonce,
+    max_cap,
+  }: {
+    admin: string;
+    nonce: bigint;
+    max_cap: bigint;
+  }): Promise<AssembledTransaction<null>> {
     return new AssembledTransaction(
       this.options,
       'set_max_cap',
       [
         nativeToScVal(Address.fromString(admin)),
         nativeToScVal(nonce, { type: 'u64' }),
-        nativeToScVal(max_cap, { type: 'u64' })
+        nativeToScVal(max_cap, { type: 'u64' }),
       ],
-      () => null
+      () => null,
     );
   }
 
-  async set_merkle_root({ admin, nonce, root }: { admin: string; nonce: bigint; root: Uint8Array }): Promise<AssembledTransaction<null>> {
+  async set_merkle_root({
+    admin,
+    nonce,
+    root,
+  }: {
+    admin: string;
+    nonce: bigint;
+    root: Uint8Array;
+  }): Promise<AssembledTransaction<null>> {
     return new AssembledTransaction(
       this.options,
       'set_merkle_root',
       [
         nativeToScVal(Address.fromString(admin)),
         nativeToScVal(nonce, { type: 'u64' }),
-        nativeToScVal(root)
+        nativeToScVal(root),
       ],
-      () => null
+      () => null,
     );
   }
 
   async admin_nonce(): Promise<AssembledTransaction<bigint>> {
-    return new AssembledTransaction(
-      this.options,
-      'admin_nonce',
-      [],
-      (val) => scValToNative(val)
-    );
+    return new AssembledTransaction(this.options, 'admin_nonce', [], (val) => scValToNative(val));
   }
 
   async is_active(): Promise<AssembledTransaction<boolean>> {
-    return new AssembledTransaction(
-      this.options,
-      'is_active',
-      [],
-      (val) => scValToNative(val)
-    );
+    return new AssembledTransaction(this.options, 'is_active', [], (val) => scValToNative(val));
   }
 
   async is_within_window(): Promise<AssembledTransaction<boolean>> {
-    return new AssembledTransaction(
-      this.options,
-      'is_within_window',
-      [],
-      (val) => scValToNative(val)
+    return new AssembledTransaction(this.options, 'is_within_window', [], (val) =>
+      scValToNative(val),
     );
   }
 
   async get_window(): Promise<AssembledTransaction<[bigint, bigint]>> {
-    return new AssembledTransaction(
-      this.options,
-      'get_window',
-      [],
-      (val) => scValToNative(val)
-    );
+    return new AssembledTransaction(this.options, 'get_window', [], (val) => scValToNative(val));
   }
 
   async get_max_cap(): Promise<AssembledTransaction<bigint>> {
-    return new AssembledTransaction(
-      this.options,
-      'get_max_cap',
-      [],
-      (val) => scValToNative(val)
-    );
+    return new AssembledTransaction(this.options, 'get_max_cap', [], (val) => scValToNative(val));
   }
 
   async get_merkle_root(): Promise<AssembledTransaction<Uint8Array | null>> {
-    return new AssembledTransaction(
-      this.options,
-      'get_merkle_root',
-      [],
-      (val) => scValToNative(val)
+    return new AssembledTransaction(this.options, 'get_merkle_root', [], (val) =>
+      scValToNative(val),
     );
   }
 
   async get_participant_count(): Promise<AssembledTransaction<bigint>> {
-    return new AssembledTransaction(
-      this.options,
-      'get_participant_count',
-      [],
-      (val) => scValToNative(val)
+    return new AssembledTransaction(this.options, 'get_participant_count', [], (val) =>
+      scValToNative(val),
     );
   }
 }

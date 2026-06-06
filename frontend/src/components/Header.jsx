@@ -54,9 +54,7 @@ export default function Header({
           <div className="nav-links">
             {/* #295 — only show the history link when a wallet is
                 connected; the page itself is per-wallet. */}
-            {walletAddress && (
-              <a href="/history">Transaction History</a>
-            )}
+            {walletAddress && <a href="/history">Transaction History</a>}
             {NAV_LINKS.map((link) => (
               <a key={link.href} href={link.href} target="_blank" rel="noopener noreferrer">
                 {link.label}

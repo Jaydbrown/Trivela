@@ -129,8 +129,8 @@ export default function About({
             fontSize: '0.9rem',
           }}
         >
-          Active environment and contract settings. Sources show where each
-          value originated (env, backend, or dev-switcher).
+          Active environment and contract settings. Sources show where each value originated (env,
+          backend, or dev-switcher).
         </p>
 
         <Section title="API">

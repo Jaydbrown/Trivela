@@ -63,6 +63,30 @@ jobs:
         run: |
           cargo build --target wasm32-unknown-unknown --release -p trivela-rewards-contract -p trivela-campaign-contract
 
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Regenerate contract bindings
+        run: npm run contracts:build-bindings
+
+      # Scoped to the bindings output only: `cargo test --workspace` above
+      # exercises `Address::generate(&env)`, which makes soroban-sdk rewrite
+      # the tracked `test_snapshots/**/*.json` ledger snapshots with fresh
+      # random addresses on every run. Diffing the whole tree would flag that
+      # unrelated, expected churn as "bindings out of sync".
+      - name: Check for unstaged changes (bindings out of sync)
+        run: git diff --exit-code -- frontend/src/contracts/
+
+      # Installing the nightly toolchain switches rustup's default away from
+      # stable (and nightly lacks the wasm32-unknown-unknown target), so this
+      # must run AFTER the bindings regeneration above — which shells out to
+      # `cargo build --target wasm32-unknown-unknown` — or that build fails
+      # with E0463 "can't find crate for `core`".
       - name: Install nightly toolchain for cargo-fuzz (optional)
         if: github.event_name == 'pull_request'
         continue-on-error: true
@@ -78,17 +102,3 @@ jobs:
         continue-on-error: true
         working-directory: contracts/campaign
         run: cargo +nightly fuzz build
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Regenerate contract bindings
-        run: npm run contracts:build-bindings
-
-      - name: Check for unstaged changes (bindings out of sync)
-        run: git diff --exit-code

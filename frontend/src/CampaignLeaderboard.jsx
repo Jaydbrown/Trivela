@@ -77,9 +77,18 @@ export default function CampaignLeaderboard({
   const [rankCopied, setRankCopied] = useState(false);
 
   const searchTimerRef = useRef(null);
+  const isInitialSearchRef = useRef(true);
 
-  // Debounce search input
+  // Debounce search input. Skip the very first run — `search` starts at ''
+  // (matching `debouncedSearch`), so there's nothing to debounce on mount,
+  // and clearing `participants` here would otherwise race with the initial
+  // `fetchLeaderboard` call below and wipe out data it had already loaded.
   useEffect(() => {
+    if (isInitialSearchRef.current) {
+      isInitialSearchRef.current = false;
+      return undefined;
+    }
+
     clearTimeout(searchTimerRef.current);
     searchTimerRef.current = setTimeout(() => {
       setDebouncedSearch(search.trim());

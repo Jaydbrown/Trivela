@@ -12,8 +12,9 @@ import { test, expect } from '@playwright/test';
 const STORYBOOK_URL = process.env.STORYBOOK_URL || 'http://localhost:6006';
 
 // Stories to test - add new stories here as they're created
-// Note: Excluding Header stories as they require React Router context
 const stories = [
+  { id: 'layout-header--default', name: 'Header - Default' },
+  { id: 'layout-header--connected-wallet', name: 'Header - ConnectedWallet' },
   { id: 'components-campaigncard--active', name: 'CampaignCard - Active' },
   { id: 'components-campaigncard--featured', name: 'CampaignCard - Featured' },
   { id: 'components-campaigncard--inactive', name: 'CampaignCard - Inactive' },

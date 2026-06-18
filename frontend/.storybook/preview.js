@@ -1,6 +1,7 @@
 import '../src/index.css';
 import '../src/Landing.css';
 import { applyTheme } from '../src/theme';
+import { MemoryRouter } from 'react-router-dom';
 
 export const globalTypes = {
   theme: {
@@ -19,6 +20,13 @@ export const globalTypes = {
 };
 
 export const decorators = [
+  // Provide Router context for all stories (required by components using Link, useLocation, etc.)
+  (Story) => (
+    <MemoryRouter initialEntries={['/']}>
+      <Story />
+    </MemoryRouter>
+  ),
+  // Theme decorator
   (Story, context) => {
     applyTheme(context.globals.theme || 'dark');
     return Story();

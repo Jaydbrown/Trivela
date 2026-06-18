@@ -325,11 +325,58 @@ npm run test:backend
 npm run build:frontend
 # 2. Run the tests
 npm run test:frontend
+
+# Frontend visual regression tests (Playwright + Storybook)
+cd frontend
+npm run test:visual                # Run visual tests
+npm run test:visual:update         # Update baseline snapshots
+npm run test:visual:report         # View detailed HTML report
 ```
 
 The frontend E2E tests use **Playwright**. They run against a local preview server
 (`npm run preview`). Ensure the backend is running if you want the tests to hit real API endpoints,
 otherwise they will show the "empty state" as expected in a isolated environment.
+
+### Load Testing
+
+Load tests validate backend performance under synthetic traffic using [k6](https://k6.io/):
+
+```bash
+# Install k6: brew install k6 (macOS) or see https://k6.io/docs/get-started/installation/
+
+# Run from repo root (starts backend automatically via npm script)
+npm run load-test                                      # default: read-campaigns scenario
+LOAD_SCENARIO=burst-registration npm run load-test    # user registration spike
+LOAD_SCENARIO=claim-storm API_KEY=sk_dev npm run load-test  # reward claim surge
+```
+
+Available scenarios (`load-tests/scenarios/`):
+- **read-campaigns** (100 VUs, 30s) - Read-heavy GET requests
+- **write-campaigns** (10 VUs, 30s) - POST campaign creation  
+- **mixed-read-write** (80R+20W VUs, 60s) - Combined traffic
+- **burst-registration** (0→200 VUs, 70s) - Registration spike
+- **claim-storm** (0→150 VUs, 75s) - Concurrent reward claims
+
+See [`load-tests/README.md`](load-tests/README.md) for thresholds, CI integration, and custom scenarios.
+
+### Visual Regression Testing
+
+Visual regression tests capture screenshots of Storybook components and detect unintended UI changes:
+
+```bash
+cd frontend
+
+# Run tests (starts Storybook automatically)
+npm run test:visual
+
+# Update snapshots after intentional design changes
+npm run test:visual:update
+
+# View detailed test report with diffs
+npm run test:visual:report
+```
+
+Tests run automatically in CI on PRs that touch frontend code. See [`frontend/tests/visual/README.md`](frontend/tests/visual/README.md) for adding new tests and troubleshooting.
 
 ---
 

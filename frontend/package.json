@@ -16,6 +16,9 @@
     "test": "npm run test:unit && playwright test",
     "test:e2e": "playwright test",
     "test:e2e:lifecycle": "playwright test tests/e2e/campaign-lifecycle.test.ts",
+    "test:visual": "playwright test --config=playwright.visual.config.ts",
+    "test:visual:update": "playwright test --config=playwright.visual.config.ts --update-snapshots",
+    "test:visual:report": "playwright show-report playwright-report-visual",
     "storybook": "storybook dev -p 6006",
     "build-storybook": "storybook build",
     "security:xss": "npm run lint && grep -r 'dangerouslySetInnerHTML' src/ || echo 'No dangerouslySetInnerHTML found - XSS audit passed'"

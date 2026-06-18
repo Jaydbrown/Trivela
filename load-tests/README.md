@@ -6,15 +6,18 @@ but can target any environment via the `BASE_URL` env variable.
 
 ## Scenarios
 
-| File                            | Profile             | What it covers                       |
-| ------------------------------- | ------------------- | ------------------------------------ |
-| `scenarios/read-campaigns.js`   | 100 VUs · 30s       | `GET /api/v1/campaigns` (read heavy) |
-| `scenarios/write-campaigns.js`  | 10 VUs · 30s        | `POST /api/v1/campaigns` (writes)    |
-| `scenarios/mixed-read-write.js` | 80R + 20W VUs · 60s | Combined read/write traffic          |
+| File                              | Profile             | What it covers                                  |
+| --------------------------------- | ------------------- | ----------------------------------------------- |
+| `scenarios/read-campaigns.js`     | 100 VUs · 30s       | `GET /api/v1/campaigns` (read heavy)            |
+| `scenarios/write-campaigns.js`    | 10 VUs · 30s        | `POST /api/v1/campaigns` (writes)               |
+| `scenarios/mixed-read-write.js`   | 80R + 20W VUs · 60s | Combined read/write traffic                     |
+| `scenarios/burst-registration.js` | 0→200 VUs · 70s     | User registration spike (ramping burst)         |
+| `scenarios/claim-storm.js`        | 0→150 VUs · 75s     | Concurrent reward claims (storm scenario)       |
 
-Each scenario applies the project pass/fail thresholds:
-`http_req_duration{expected_response:true} p(95) < 200ms` and `http_req_failed rate < 0.01`. Set
-`LATENCY_P95_MS` and `ERROR_RATE_THRESHOLD` to override.
+Most scenarios apply the project pass/fail thresholds:
+`http_req_duration{expected_response:true} p(95) < 200ms` and `http_req_failed rate < 0.01`.
+Burst/storm scenarios use more lenient thresholds (500-800ms p95, 3-5% error rate) to account for
+traffic spikes. Set `LATENCY_P95_MS` and `ERROR_RATE_THRESHOLD` to override.
 
 ## Prerequisites
 
@@ -30,9 +33,11 @@ Each scenario applies the project pass/fail thresholds:
 TRIVELA_API_KEY=sk_dev_local npm run dev:backend
 
 # 2. run the scenarios from the repo root
-npm run load-test                                # default: read-campaigns
+npm run load-test                                      # default: read-campaigns
 LOAD_SCENARIO=write-campaigns API_KEY=sk_dev_local npm run load-test
-LOAD_SCENARIO=mixed-read-write  API_KEY=sk_dev_local npm run load-test
+LOAD_SCENARIO=mixed-read-write API_KEY=sk_dev_local npm run load-test
+LOAD_SCENARIO=burst-registration npm run load-test    # registration spike
+LOAD_SCENARIO=claim-storm API_KEY=sk_dev_local npm run load-test  # claim surge
 ```
 
 `npm run load-test` is a thin wrapper around `k6 run`. To run a scenario directly:

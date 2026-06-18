@@ -13,11 +13,11 @@ export const options = {
       executor: 'ramping-vus',
       startVUs: 0,
       stages: [
-        { duration: '5s', target: 30 },   // Quick ramp to 30 users
+        { duration: '5s', target: 30 }, // Quick ramp to 30 users
         { duration: '20s', target: 150 }, // Storm to 150 users
         { duration: '30s', target: 150 }, // Sustain the storm
-        { duration: '15s', target: 30 },  // Wind down
-        { duration: '5s', target: 0 },    // Stop
+        { duration: '15s', target: 30 }, // Wind down
+        { duration: '5s', target: 0 }, // Stop
       ],
     },
   },
@@ -25,7 +25,7 @@ export const options = {
     ...defaultThresholds,
     // Claims are more expensive (DB writes + potential external calls)
     'http_req_duration{expected_response:true}': ['p(95)<800'],
-    'http_req_failed': ['rate<0.03'], // Allow 3% error rate for claims
+    http_req_failed: ['rate<0.03'], // Allow 3% error rate for claims
   },
 };
 
@@ -33,11 +33,11 @@ export default function () {
   // Simulate a user attempting to claim rewards
   const userId = `claimant-${__VU}-${__ITER}`;
   const campaignSlug = selectCampaign();
-  
+
   // First, check available rewards for this campaign
   const checkRes = http.get(
     `${BASE_URL}/api/v1/campaigns/${campaignSlug}/rewards?userId=${userId}`,
-    { headers: writeHeaders() }
+    { headers: writeHeaders() },
   );
 
   const hasRewards = check(checkRes, {
@@ -53,11 +53,9 @@ export default function () {
       timestamp: Date.now(),
     });
 
-    const claimRes = http.post(
-      `${BASE_URL}/api/v1/campaigns/${campaignSlug}/claim`,
-      claimPayload,
-      { headers: writeHeaders() }
-    );
+    const claimRes = http.post(`${BASE_URL}/api/v1/campaigns/${campaignSlug}/claim`, claimPayload, {
+      headers: writeHeaders(),
+    });
 
     check(claimRes, {
       'claim processed': (r) => r.status === 200 || r.status === 201,

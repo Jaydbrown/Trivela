@@ -12,10 +12,10 @@ export const options = {
       executor: 'ramping-vus',
       startVUs: 0,
       stages: [
-        { duration: '10s', target: 50 },  // Ramp up to 50 users
+        { duration: '10s', target: 50 }, // Ramp up to 50 users
         { duration: '30s', target: 200 }, // Burst to 200 users
         { duration: '20s', target: 200 }, // Hold the burst
-        { duration: '10s', target: 0 },   // Ramp down
+        { duration: '10s', target: 0 }, // Ramp down
       ],
     },
   },
@@ -23,7 +23,7 @@ export const options = {
     ...defaultThresholds,
     // More lenient threshold for burst scenario
     'http_req_duration{expected_response:true}': ['p(95)<500'],
-    'http_req_failed': ['rate<0.05'], // Allow 5% error rate during burst
+    http_req_failed: ['rate<0.05'], // Allow 5% error rate during burst
   },
 };
 
@@ -31,7 +31,7 @@ export default function () {
   // Simulate user registration flow
   const userId = `user-${__VU}-${__ITER}-${Date.now()}`;
   const walletAddress = `G${randomBase32(55)}`; // Mock Stellar address
-  
+
   const payload = JSON.stringify({
     userId,
     walletAddress,

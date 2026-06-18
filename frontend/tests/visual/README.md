@@ -141,6 +141,7 @@ Visual test settings are in `playwright.visual.config.ts`:
 ### Tests fail with "Storybook not available"
 
 Ensure Storybook runs successfully:
+
 ```bash
 npm run storybook
 # Visit http://localhost:6006 and verify stories load
@@ -149,6 +150,7 @@ npm run storybook
 ### Snapshots differ on different machines
 
 Font rendering and OS-level differences can cause minor variations. The 2% threshold accounts for this, but you may need to:
+
 - Generate baselines on the same OS as CI (Linux)
 - Use Docker for consistent rendering
 - Increase `maxDiffPixelRatio` in config (not recommended)
@@ -156,6 +158,7 @@ Font rendering and OS-level differences can cause minor variations. The 2% thres
 ### Too many snapshots to review
 
 Focus on critical user paths first:
+
 - Primary navigation (Header)
 - Key campaign displays (CampaignCard)
 - Transaction states (TransactionStatus)

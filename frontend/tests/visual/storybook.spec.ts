@@ -4,7 +4,7 @@ import { test, expect } from '@playwright/test';
  * Visual regression tests for Storybook components.
  * These tests capture screenshots of each story and compare them against
  * baseline images to detect unintended visual changes.
- * 
+ *
  * Run: npm run test:visual
  * Update baselines: npm run test:visual:update
  */
@@ -36,13 +36,13 @@ test.describe('Storybook Visual Regression', () => {
     test(`${story.name} matches snapshot`, async ({ page }) => {
       // Navigate to the specific story
       await page.goto(`${STORYBOOK_URL}/iframe.html?id=${story.id}&viewMode=story`);
-      
+
       // Wait for the story to render
       await page.waitForSelector('#storybook-root > *', { timeout: 5000 });
-      
+
       // Give components time to settle (animations, etc.)
       await page.waitForTimeout(500);
-      
+
       // Take screenshot and compare
       await expect(page).toHaveScreenshot(`${story.id}.png`, {
         fullPage: true,
@@ -55,11 +55,11 @@ test.describe('Storybook Visual Regression', () => {
 
   test('all stories load without errors', async ({ page }) => {
     const errors: string[] = [];
-    
+
     page.on('pageerror', (error) => {
       errors.push(`Page error: ${error.message}`);
     });
-    
+
     page.on('console', (msg) => {
       if (msg.type() === 'error') {
         errors.push(`Console error: ${msg.text()}`);

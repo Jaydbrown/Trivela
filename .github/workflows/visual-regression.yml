@@ -75,13 +75,13 @@ jobs:
               repo: context.repo.repo,
               body: `## 🖼️ Visual Regression Tests Failed
 
-Visual differences detected! Please review the diff images in the [workflow artifacts](https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}).
+            Visual differences detected! Please review the diff images in the [workflow artifacts](https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}).
 
-**If the visual changes are intentional:**
-1. Run \`npm run test:visual:update\` locally
-2. Review and commit the updated snapshots
-3. Push the changes
+            **If the visual changes are intentional:**
+            1. Run \`npm run test:visual:update\` locally
+            2. Review and commit the updated snapshots
+            3. Push the changes
 
-**If the changes are unexpected:**
-Investigate the cause of the visual regression before merging.`
+            **If the changes are unexpected:**
+            Investigate the cause of the visual regression before merging.`
             });

@@ -6,13 +6,13 @@ but can target any environment via the `BASE_URL` env variable.
 
 ## Scenarios
 
-| File                              | Profile             | What it covers                                  |
-| --------------------------------- | ------------------- | ----------------------------------------------- |
-| `scenarios/read-campaigns.js`     | 100 VUs · 30s       | `GET /api/v1/campaigns` (read heavy)            |
-| `scenarios/write-campaigns.js`    | 10 VUs · 30s        | `POST /api/v1/campaigns` (writes)               |
-| `scenarios/mixed-read-write.js`   | 80R + 20W VUs · 60s | Combined read/write traffic                     |
-| `scenarios/burst-registration.js` | 0→200 VUs · 70s     | User registration spike (ramping burst)         |
-| `scenarios/claim-storm.js`        | 0→150 VUs · 75s     | Concurrent reward claims (storm scenario)       |
+| File                              | Profile             | What it covers                            |
+| --------------------------------- | ------------------- | ----------------------------------------- |
+| `scenarios/read-campaigns.js`     | 100 VUs · 30s       | `GET /api/v1/campaigns` (read heavy)      |
+| `scenarios/write-campaigns.js`    | 10 VUs · 30s        | `POST /api/v1/campaigns` (writes)         |
+| `scenarios/mixed-read-write.js`   | 80R + 20W VUs · 60s | Combined read/write traffic               |
+| `scenarios/burst-registration.js` | 0→200 VUs · 70s     | User registration spike (ramping burst)   |
+| `scenarios/claim-storm.js`        | 0→150 VUs · 75s     | Concurrent reward claims (storm scenario) |
 
 Most scenarios apply the project pass/fail thresholds:
 `http_req_duration{expected_response:true} p(95) < 200ms` and `http_req_failed rate < 0.01`.

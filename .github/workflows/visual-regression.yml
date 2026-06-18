@@ -70,25 +70,3 @@ jobs:
             frontend/tests/visual/__snapshots__/**/*-actual.png
           retention-days: 30
           if-no-files-found: ignore
-
-      - name: Comment PR with results
-        if: failure() && github.event_name == 'pull_request'
-        uses: actions/github-script@v7
-        with:
-          script: |
-            github.rest.issues.createComment({
-              issue_number: context.issue.number,
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              body: `## 🖼️ Visual Regression Tests Failed
-
-            Visual differences detected! Please review the diff images in the [workflow artifacts](https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}).
-
-            **If the visual changes are intentional:**
-            1. Run \`npm run test:visual:update\` locally
-            2. Review and commit the updated snapshots
-            3. Push the changes
-
-            **If the changes are unexpected:**
-            Investigate the cause of the visual regression before merging.`
-            });

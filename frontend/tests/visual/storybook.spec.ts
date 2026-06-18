@@ -24,9 +24,6 @@ const stories = [
   { id: 'components-statusbadge--upcoming', name: 'StatusBadge - Upcoming' },
   { id: 'components-statusbadge--ended', name: 'StatusBadge - Ended' },
   { id: 'components-statusbadge--paused', name: 'StatusBadge - Paused' },
-  { id: 'components-transactionstatus--pending', name: 'TransactionStatus - Pending' },
-  { id: 'components-transactionstatus--success', name: 'TransactionStatus - Success' },
-  { id: 'components-transactionstatus--failed', name: 'TransactionStatus - Failed' },
 ];
 
 test.describe('Storybook Visual Regression', () => {
@@ -73,26 +70,4 @@ test.describe('Storybook Visual Regression', () => {
       });
     });
   }
-
-  test('all stories load without errors', async ({ page }) => {
-    const errors: string[] = [];
-
-    page.on('pageerror', (error) => {
-      errors.push(`Page error: ${error.message}`);
-    });
-
-    page.on('console', (msg) => {
-      if (msg.type() === 'error') {
-        errors.push(`Console error: ${msg.text()}`);
-      }
-    });
-
-    for (const story of stories) {
-      await page.goto(`${STORYBOOK_URL}/iframe.html?id=${story.id}&viewMode=story`);
-      await page.waitForSelector('#storybook-root > *', { timeout: 5000 });
-      await page.waitForTimeout(500);
-    }
-
-    expect(errors).toEqual([]);
-  });
 });

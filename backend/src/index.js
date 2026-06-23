@@ -54,6 +54,7 @@ import { createVariantService } from './services/variantService.js';
 import { createCohortRoutes } from './routes/cohorts.js';
 import { createCohortService } from './services/cohortService.js';
 import { createPushRoutes } from './routes/push.js';
+import { createOrgRoutes } from './routes/orgs.js';
 import { createWebPushService } from './services/webPushService.js';
 import { requestTimeout } from './middleware/timeout.js';
 import { PoolSaturatedError } from './rpcPool.js';
@@ -247,6 +248,7 @@ export async function createApp(options = {}) {
   const apiKeyRepository = dal.apiKeys;
   const failedJobRepository = options.failedJobRepository ?? dal.failedJobs;
   const allowlistRepository = dal.allowlists;
+  const orgMemberRepository = dal.orgMembers;
 
   const storageAdapter = /** @type {import('./storage/storageAdapter.js').StorageAdapter} */ (
     options.storageAdapter ?? createStorageAdapter(process.env)
@@ -368,6 +370,7 @@ export async function createApp(options = {}) {
         process.env.TRIVELA_API_KEY ??
         '',
       apiKeyRepository: options.apiKeyRepository ?? apiKeyRepository,
+      orgMemberRepository: options.orgMemberRepository ?? orgMemberRepository,
     }),
   ];
   const requireMasterKey = [
@@ -1613,6 +1616,17 @@ export async function createApp(options = {}) {
         bonusEarned,
       });
     });
+
+    // Org + RBAC member management routes (Issue #608)
+    // Registered BEFORE the app.use(prefix, requireApiKey, ...) mounts so that
+    // master-key-only routes (POST /orgs) are not intercepted by the API-key
+    // guard that the variant/cohort/push routers apply at the prefix level.
+    const orgRouter = createOrgRoutes({
+      orgMemberRepository,
+      requireMasterKey,
+      requireApiKey,
+    });
+    app.use(prefix, rateLimiter, orgRouter);
 
     // Variant routes for A/B testing (Issue #624)
     const variantRouter = createVariantRoutes({

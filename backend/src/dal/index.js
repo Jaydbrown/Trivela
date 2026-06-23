@@ -17,6 +17,7 @@ import { createSqliteCohortRepository } from './sqliteCohortRepository.js';
 import { createSqlitePushSubscriptionRepository } from './sqlitePushSubscriptionRepository.js';
 import { createPool, isPostgresUrl } from './pg/pgClient.js';
 import { createSqliteAllowlistRepository } from './sqliteAllowlistRepository.js';
+import { createSqliteOrgMemberRepository } from './sqliteOrgMemberRepository.js';
 
 import { runPgMigrations } from './pg/migrate.js';
 import { createPgCampaignRepository } from './pg/pgCampaignRepository.js';
@@ -86,6 +87,7 @@ export async function createDal({
     apiKeys: assertApiKeyRepository(apiKeyRepository ?? createSqliteApiKeyRepository({ db })),
     failedJobs: failedJobRepository ?? createSqliteFailedJobRepository({ db }),
     allowlists: allowlistRepository ?? createSqliteAllowlistRepository({ db }),
+    orgMembers: createSqliteOrgMemberRepository({ db }),
     db,
     pgPool,
   };

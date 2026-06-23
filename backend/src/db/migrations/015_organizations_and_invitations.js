@@ -1,4 +1,4 @@
-export const version = 14;
+export const version = 15;
 export const description = 'Add organizations, team members, and invitations';
 
 export function up(db) {

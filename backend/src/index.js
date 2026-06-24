@@ -55,6 +55,8 @@ import { createCohortRoutes } from './routes/cohorts.js';
 import { createCohortService } from './services/cohortService.js';
 import { createPushRoutes } from './routes/push.js';
 import { createOrgRoutes } from './routes/orgs.js';
+import { createAuditRouter } from './routes/audit.js';
+import { createAuditLogService } from './services/auditLogService.js';
 import { createWebPushService } from './services/webPushService.js';
 import { requestTimeout } from './middleware/timeout.js';
 import { PoolSaturatedError } from './rpcPool.js';
@@ -263,6 +265,10 @@ export async function createApp(options = {}) {
   });
   const variantService = createVariantService({ variantRepo: variantRepository });
   const cohortService = createCohortService({ cohortRepo: cohortRepository });
+  const auditLogService = createAuditLogService({
+    auditLogRepository,
+    orgMemberRepository,
+  });
   const webPushService = createWebPushService({
     repository: pushSubscriptionRepository,
     vapid: {
@@ -581,6 +587,7 @@ export async function createApp(options = {}) {
         entity,
         entityId,
         diff,
+        orgId: req.auth?.orgId || null,
         timestamp: new Date().toISOString(),
       });
     } catch (error) {
@@ -1654,6 +1661,12 @@ export async function createApp(options = {}) {
       requireApiKey,
     });
     app.use(prefix, rateLimiter, orgRouter);
+
+    // Audit log routes for organization-scoped audit logging and activity feeds (Issue #612)
+    const auditRouter = createAuditRouter({
+      auditLogService,
+    });
+    app.use(prefix, rateLimiter, auditRouter);
 
     // Variant routes for A/B testing (Issue #624)
     const variantRouter = createVariantRoutes({

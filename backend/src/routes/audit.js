@@ -1,6 +1,6 @@
 // @ts-check
 import { Router } from 'express';
-import { requireApiKey, requirePermission } from '../middleware/apiKeyAuth.js';
+import { requirePermission } from '../middleware/rbac.js';
 
 /**
  * Organization-scoped audit log API routes
@@ -15,10 +15,11 @@ import { requireApiKey, requirePermission } from '../middleware/apiKeyAuth.js';
 
 /**
  * @param {{
- *   auditLogService: import('../services/auditLogService.js').AuditLogService,
+ *   auditLogService: ReturnType<import('../services/auditLogService.js').createAuditLogService>,
+ *   requireApiKey: import('express').RequestHandler[],
  * }} services
  */
-export function createAuditRouter({ auditLogService }) {
+export function createAuditRouter({ auditLogService, requireApiKey }) {
   const router = Router();
 
   // ── Get org audit logs ───────────────────────────────────────────────────
@@ -37,8 +38,8 @@ export function createAuditRouter({ auditLogService }) {
       entityId,
       startDate,
       endDate,
-      page = 1,
-      pageSize = 50,
+      page,
+      pageSize,
     } = req.query;
 
     try {
@@ -49,8 +50,8 @@ export function createAuditRouter({ auditLogService }) {
         entityId,
         startDate,
         endDate,
-        page: parseInt(page, 10),
-        pageSize: parseInt(pageSize, 10),
+        page: parseInt(/** @type {string} */ (page) || '1', 10),
+        pageSize: parseInt(/** @type {string} */ (pageSize) || '50', 10),
       });
 
       return res.json({
@@ -192,12 +193,12 @@ export function createAuditRouter({ auditLogService }) {
       }
 
       const { orgId } = req.params;
-      const { limit = 20, since } = req.query;
+      const { limit, since } = req.query;
 
       try {
         const activities = auditLogService.getActivityFeed(orgId, {
-          limit: parseInt(limit, 10),
-          since,
+          limit: parseInt(/** @type {string} */ (limit) || '20', 10),
+          since: /** @type {string | undefined} */ (since),
         });
 
         return res.json({

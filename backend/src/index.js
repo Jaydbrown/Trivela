@@ -1665,6 +1665,7 @@ export async function createApp(options = {}) {
     // Audit log routes for organization-scoped audit logging and activity feeds (Issue #612)
     const auditRouter = createAuditRouter({
       auditLogService,
+      requireApiKey,
     });
     app.use(prefix, rateLimiter, auditRouter);
 

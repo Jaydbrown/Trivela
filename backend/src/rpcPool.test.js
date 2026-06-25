@@ -34,7 +34,7 @@ test('recovery after backoff period', async () => {
   pool.markUnhealthy('https://a.com');
   assert.equal(pool.getHealthyRpcUrl(), 'https://b.com');
 
-  await new Promise(resolve => setTimeout(resolve, 30));
+  await new Promise((resolve) => setTimeout(resolve, 30));
 
   const status = pool.getStatus();
   assert.equal(status.healthy, 2, 'endpoint a should have recovered after backoff');
@@ -48,7 +48,7 @@ test('getStatus reports correct healthy and unhealthy counts', () => {
   assert.equal(status.healthy, 2);
   assert.equal(status.unhealthy, 1);
   assert.equal(status.urls.length, 3);
-  assert.equal(status.urls.find(u => u.url === 'https://a.com').healthy, false);
+  assert.equal(status.urls.find((u) => u.url === 'https://a.com').healthy, false);
 });
 
 test('markHealthy re-enables a previously unhealthy endpoint', () => {

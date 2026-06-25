@@ -21,7 +21,7 @@ function rowToApiKey(row) {
 }
 
 /**
- * @param {{ db: import('better-sqlite3').Database }} params
+ * @param {{ db: InstanceType<import('better-sqlite3')> }} params
  */
 export function createSqliteApiKeyRepository({ db }) {
   const insertStmt = db.prepare(`
@@ -65,18 +65,27 @@ export function createSqliteApiKeyRepository({ db }) {
   }
 
   function list() {
-    return db.prepare(`
+    return db
+      .prepare(
+        `
       SELECT id, label, created_at, expires_at, last_used_at, active
       FROM api_keys
       ORDER BY created_at DESC
-    `).all().map(rowToApiKey);
+    `,
+      )
+      .all()
+      .map(rowToApiKey);
   }
 
   function getById(id) {
-    const row = db.prepare(`
+    const row = db
+      .prepare(
+        `
       SELECT id, label, created_at, expires_at, last_used_at, active
       FROM api_keys WHERE id = ?
-    `).get(id);
+    `,
+      )
+      .get(id);
     return row ? rowToApiKey(row) : undefined;
   }
 

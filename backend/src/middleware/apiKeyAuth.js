@@ -55,11 +55,15 @@ function readProvidedKey(req) {
  *     touchLastUsed: (id: string) => void,
  *     hasActiveKeys?: () => boolean,
  *   } | null,
+ *   orgMemberRepository?: {
+ *     getByApiKeyId: (apiKeyId: string) => { orgId: string, role: string } | null,
+ *   } | null,
  * }} [options]
  */
 export default function createApiKeyAuth({
   apiKeys = process.env.TRIVELA_API_KEYS || process.env.TRIVELA_API_KEY || '',
   apiKeyRepository = null,
+  orgMemberRepository = null,
 } = {}) {
   const allowedKeys = normalizeApiKeys(apiKeys);
   const allowedKeySet = new Set(allowedKeys);
@@ -74,10 +78,12 @@ export default function createApiKeyAuth({
     const provided = readProvidedKey(req);
 
     if (provided && allowedKeySet.has(provided)) {
+      // Env-sourced keys are treated as org owners for backward compatibility.
       req.auth = {
         type: 'apiKey',
         apiKey: String(provided),
         source: 'env',
+        orgRole: 'owner',
       };
       return next();
     }
@@ -86,27 +92,32 @@ export default function createApiKeyAuth({
       const match = apiKeyRepository.validate(provided);
       if (match) {
         apiKeyRepository.touchLastUsed(match.id);
+
+        // Resolve org membership so RBAC middleware can check roles.
+        const membership = orgMemberRepository?.getByApiKeyId(match.id) ?? null;
         req.auth = {
           type: 'apiKey',
           apiKey: String(provided),
           source: 'database',
           apiKeyId: match.id,
           label: match.label,
+          orgId: membership?.orgId ?? null,
+          orgRole: membership?.role ?? null,
         };
         return next();
       }
     }
 
-    return res.status(401).json({ error: 'Unauthorized – valid API key required.', code: 'UNAUTHORIZED' });
+    return res
+      .status(401)
+      .json({ error: 'Unauthorized – valid API key required.', code: 'UNAUTHORIZED' });
   };
 }
 
 /**
  * @param {{ masterKey?: string }} [options]
  */
-export function createMasterKeyAuth({
-  masterKey = process.env.TRIVELA_MASTER_KEY || '',
-} = {}) {
+export function createMasterKeyAuth({ masterKey = process.env.TRIVELA_MASTER_KEY || '' } = {}) {
   const normalizedMasterKey = String(masterKey).trim();
 
   return function requireMasterKey(req, res, next) {

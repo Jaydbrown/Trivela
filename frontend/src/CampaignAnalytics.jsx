@@ -96,10 +96,7 @@ export default function CampaignAnalytics({
     loadStats();
   }, [loadStats]);
 
-  const registrationSeries = useMemo(
-    () => stats?.registrationsByDay ?? [],
-    [stats],
-  );
+  const registrationSeries = useMemo(() => stats?.registrationsByDay ?? [], [stats]);
   const pointsSeries = useMemo(() => stats?.pointsByDay ?? [], [stats]);
 
   const handleExportCsv = () => {
@@ -214,9 +211,17 @@ export default function CampaignAnalytics({
                     <LineChart data={registrationSeries}>
                       <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
                       <XAxis dataKey="date" tick={{ fill: 'var(--text-muted)', fontSize: 12 }} />
-                      <YAxis allowDecimals={false} tick={{ fill: 'var(--text-muted)', fontSize: 12 }} />
+                      <YAxis
+                        allowDecimals={false}
+                        tick={{ fill: 'var(--text-muted)', fontSize: 12 }}
+                      />
                       <Tooltip />
-                      <Line type="monotone" dataKey="count" stroke="var(--accent)" strokeWidth={2} />
+                      <Line
+                        type="monotone"
+                        dataKey="count"
+                        stroke="var(--accent)"
+                        strokeWidth={2}
+                      />
                     </LineChart>
                   </ResponsiveContainer>
                 </div>

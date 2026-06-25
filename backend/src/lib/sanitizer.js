@@ -67,10 +67,10 @@ export function sanitizeUrlParam(param) {
 
   // Remove null bytes and control characters
   let clean = param.replace(/[\x00-\x1f\x7f]/g, '');
-  
+
   // HTML escape to prevent injection
   clean = escapeHtml(clean);
-  
+
   // Limit length to prevent DOS
   return clean.substring(0, 255);
 }
@@ -95,7 +95,7 @@ export function validateSlug(slug) {
 
   // Should be lowercase alphanumeric with hyphens only
   const slugRegex = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
-  
+
   if (!slugRegex.test(slug)) {
     return null;
   }
@@ -121,7 +121,7 @@ export function sanitizeCampaignMetadata(value, maxLength = 500) {
 
   // Trim and remove null bytes
   let clean = value.trim().replace(/\x00/g, '');
-  
+
   // Limit to max length
   if (clean.length > maxLength) {
     clean = clean.substring(0, maxLength);
@@ -147,7 +147,7 @@ export function sanitizeCampaignMetadata(value, maxLength = 500) {
  */
 export function createSafeErrorMessage(message, params = {}) {
   let result = message;
-  
+
   for (const [key, value] of Object.entries(params)) {
     const safeValue = sanitizeUrlParam(String(value));
     result = result.replace(`{${key}}`, safeValue);

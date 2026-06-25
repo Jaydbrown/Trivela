@@ -583,13 +583,10 @@ fn test_deregister_success_and_re_register() {
     assert!(client.is_participant(&participant));
     assert_eq!(client.get_participant_count(), 1);
 
-    // Deregister participant
+    // Deregister participant.
+    // `env.events().all()` reflects events from the most recent invocation,
+    // so we assert it right after `deregister` (before any further client calls).
     assert!(client.deregister(&participant));
-    assert!(!client.is_participant(&participant));
-    assert_eq!(client.get_participant_count(), 0);
-
-    // Check deregister event
-    let register_event = Symbol::new(&env, "register");
     let deregister_event = Symbol::new(&env, "deregister");
     assert_eq!(
         env.events().all(),
@@ -597,16 +594,18 @@ fn test_deregister_success_and_re_register() {
             &env,
             (
                 contract_id.clone(),
-                vec![&env, register_event.into_val(&env), participant.clone().into_val(&env)],
-                ().into_val(&env)
-            ),
-            (
-                contract_id.clone(),
-                vec![&env, deregister_event.into_val(&env), participant.clone().into_val(&env)],
+                vec![
+                    &env,
+                    deregister_event.into_val(&env),
+                    participant.clone().into_val(&env)
+                ],
                 ().into_val(&env)
             )
         ]
     );
+
+    assert!(!client.is_participant(&participant));
+    assert_eq!(client.get_participant_count(), 0);
 
     // Re-register works
     assert!(client.register(&participant, &leaf, &proof, &None));
@@ -629,13 +628,10 @@ fn test_admin_deregister() {
     assert!(client.is_participant(&participant));
     assert_eq!(client.get_participant_count(), 1);
 
-    // Admin deregister
+    // Admin deregister.
+    // `env.events().all()` reflects events from the most recent invocation,
+    // so we assert it right after `admin_deregister` (before any further client calls).
     assert!(client.admin_deregister(&admin, &0, &participant));
-    assert!(!client.is_participant(&participant));
-    assert_eq!(client.get_participant_count(), 0);
-
-    // Check deregister event
-    let register_event = Symbol::new(&env, "register");
     let deregister_event = Symbol::new(&env, "deregister");
     assert_eq!(
         env.events().all(),
@@ -643,16 +639,18 @@ fn test_admin_deregister() {
             &env,
             (
                 contract_id.clone(),
-                vec![&env, register_event.into_val(&env), participant.clone().into_val(&env)],
-                ().into_val(&env)
-            ),
-            (
-                contract_id.clone(),
-                vec![&env, deregister_event.into_val(&env), participant.clone().into_val(&env)],
+                vec![
+                    &env,
+                    deregister_event.into_val(&env),
+                    participant.clone().into_val(&env)
+                ],
                 ().into_val(&env)
             )
         ]
     );
+
+    assert!(!client.is_participant(&participant));
+    assert_eq!(client.get_participant_count(), 0);
 
     // Call admin deregister again for same participant (should return false and not panic)
     assert!(!client.admin_deregister(&admin, &1, &participant));
@@ -794,7 +792,6 @@ fn test_deregister_clears_persistent_and_keeps_aggregate_count_consistent() {
     assert_eq!(client.get_participant_count(), 1);
 }
 
-
 // ── 2-step admin transfer (issue #281) ───────────────────────────────────────
 
 fn setup_admin_rotation_campaign() -> (Env, CampaignContractClient<'static>, Address, Address) {
@@ -869,7 +866,7 @@ fn test_campaign_cancel_admin_transfer_clears_pending() {
 #[test]
 fn test_campaign_new_admin_can_call_admin_operations() {
     // Once accepted, the new admin's signature is enough to perform admin-only ops.
-    let (env, client, admin, new_admin) = setup_admin_rotation_campaign();
+    let (_env, client, admin, new_admin) = setup_admin_rotation_campaign();
     client.propose_admin(&admin, &new_admin);
     client.accept_admin(&new_admin);
 
@@ -912,7 +909,11 @@ fn test_register_with_valid_referrer_records_edge_and_emits_event() {
             &env,
             (
                 contract_id.clone(),
-                vec![&env, REGISTER_EVENT.into_val(&env), referee.clone().into_val(&env)],
+                vec![
+                    &env,
+                    REGISTER_EVENT.into_val(&env),
+                    referee.clone().into_val(&env)
+                ],
                 ().into_val(&env)
             ),
             (

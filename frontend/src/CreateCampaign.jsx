@@ -112,9 +112,7 @@ export default function CreateCampaign({ onCampaignCreated, campaigns = [] }) {
         setDeploymentStatus('Checking wallet connection...');
         const walletConnected = await isWalletConnected();
         if (!walletConnected) {
-          throw new Error(
-            'Wallet not connected. Please connect your wallet to deploy on-chain.',
-          );
+          throw new Error('Wallet not connected. Please connect your wallet to deploy on-chain.');
         }
 
         const walletAddress = await getWalletAddress();

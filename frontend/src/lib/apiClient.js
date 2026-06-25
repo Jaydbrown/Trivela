@@ -49,7 +49,11 @@ async function request(url, options = {}) {
 
   if (!response.ok) {
     let body;
-    try { body = await response.json(); } catch { /* ignore */ }
+    try {
+      body = await response.json();
+    } catch {
+      /* ignore */
+    }
     const message =
       body?.error ?? body?.message ?? `HTTP ${response.status}: ${response.statusText}`;
     throw new ApiError(message, response.status, body);
@@ -97,8 +101,7 @@ async function getCampaignStats(id, params = {}) {
   if (params.range) qs.set('range', params.range);
   if (params.from) qs.set('from', params.from);
   if (params.to) qs.set('to', params.to);
-  const url =
-    apiUrl(`/api/v1/campaigns/${id}/stats`) + (qs.toString() ? `?${qs}` : '');
+  const url = apiUrl(`/api/v1/campaigns/${id}/stats`) + (qs.toString() ? `?${qs}` : '');
   return request(url);
 }
 
@@ -142,8 +145,7 @@ async function getCampaignLeaderboard(campaignId, params = {}) {
   if (params.limit) qs.set('limit', String(params.limit));
   if (params.q) qs.set('q', params.q);
   const url =
-    apiUrl(`/api/v1/campaigns/${campaignId}/leaderboard`) +
-    (qs.toString() ? `?${qs}` : '');
+    apiUrl(`/api/v1/campaigns/${campaignId}/leaderboard`) + (qs.toString() ? `?${qs}` : '');
   return /** @type {Promise<{ data: any[], pagination: object }>} */ (request(url));
 }
 
@@ -164,6 +166,29 @@ async function getConfig() {
   return request(apiUrl('/api/v1/config'));
 }
 
+// ── Explore / discovery endpoints ─────────────────────────────────────────────
+
+/** @param {{ limit?: number }} [params] */
+async function getTrendingCampaigns(params = {}) {
+  const qs = new URLSearchParams();
+  qs.set('limit', String(params.limit ?? 6));
+  const url = apiUrl('/api/v1/campaigns/trending') + `?${qs}`;
+  return /** @type {Promise<{ data: any[] }>} */ (request(url));
+}
+
+/**
+ * @param {{ limit?: number }} [params]
+ */
+async function getNewCampaigns(params = {}) {
+  return getCampaigns({
+    active: true,
+    sort: 'created_at',
+    order: 'desc',
+    limit: params.limit ?? 6,
+    page: 1,
+  });
+}
+
 // ── Exports ───────────────────────────────────────────────────────────────────
 
 export const apiClient = {
@@ -177,6 +202,8 @@ export const apiClient = {
   getCampaignLeaderboard,
   getParticipantRank,
   getConfig,
+  getTrendingCampaigns,
+  getNewCampaigns,
 };
 
 export { ApiError };

@@ -15,6 +15,8 @@
 //! - `vested_credit`: topics `(vcredit, user)`, data `(vest_id: u64, total: u64)`
 //! - `vested_claim`: topics `(vclaim, user)`, data `(vest_id: u64, amount: u64)`
 //! - `redeem`: topics `(redeem, user)`, data `(points_burned: u64, asset_amount: i128)`
+//! - `ref_config`: topics `(refcfg,)`, data `(rate_bps: u32, per_referrer_cap: u64)`
+//! - `ref_bonus`: topics `(refbonus, referrer, referee)`, data `(bonus: u64, qualifying_amount: u64)`
 
 #![no_std]
 
@@ -39,6 +41,21 @@ pub enum Error {
     NoPendingAdmin = 10,
     InsufficientReserve = 11,
     InvalidRedemptionRate = 12,
+    InvalidAdminNonce = 13,
+    /// A referrer and referee cannot be the same address.
+    SelfReferral = 14,
+    /// The referee was previously rewarded as a referee of this referrer (cycle).
+    CircularReferral = 15,
+    /// This referee has already triggered a referral bonus (one per referee).
+    ReferralAlreadyRewarded = 16,
+    /// Paying this bonus would exceed the configured per-referrer cap.
+    ReferralCapExceeded = 17,
+    /// Referral rewards have not been configured (bonus rate is zero).
+    ReferralNotConfigured = 18,
+    /// The supplied referral configuration is invalid.
+    InvalidReferralConfig = 19,
+    /// The computed referral bonus rounded down to zero.
+    ZeroReferralBonus = 20,
 }
 
 /// Vesting schedule record stored per user per vest_id.
@@ -124,6 +141,9 @@ const REDEMPTION_RATE: Symbol = symbol_short!("red_rate");
 const REDEMPTION_RESERVE: Symbol = symbol_short!("red_rsrv");
 const REDEEM_EVENT: Symbol = symbol_short!("redeem");
 
+// Admin nonce — incremented on each admin operation to prevent replay attacks.
+const ADMIN_NONCE: Symbol = symbol_short!("anonce");
+
 // ── 2-step admin transfer (issue #281) ───────────────────────────────────────
 // `PENDING_ADMIN` holds an in-flight proposed admin; the new admin must call
 // `accept_admin()` themselves to complete the rotation, eliminating the
@@ -131,6 +151,23 @@ const REDEEM_EVENT: Symbol = symbol_short!("redeem");
 const PENDING_ADMIN: Symbol = symbol_short!("padmin");
 const ADMIN_PROPOSED_EVENT: Symbol = symbol_short!("aproposed");
 const ADMIN_ACCEPTED_EVENT: Symbol = symbol_short!("aaccepted");
+
+// ── On-chain referral rewards (issue #656 / #603) ────────────────────────────
+// The referral *graph* (who referred whom) is attributed by the campaign
+// contract; this contract owns the *payout* and its anti-abuse invariants:
+// self/circular blocking, one-bonus-per-referee uniqueness (the sybil gate),
+// and a configurable per-referrer cap. Referral state lives in instance storage
+// alongside balances, matching the existing crediting model.
+const REF_RATE: Symbol = symbol_short!("refrate"); // u32 bonus rate, basis points
+const REF_CAP: Symbol = symbol_short!("refcap"); // u64 cumulative cap per referrer (0 = uncapped)
+const REF_PAID: Symbol = symbol_short!("refpaid"); // (REF_PAID, referee) -> referrer Address
+const REF_TOTAL: Symbol = symbol_short!("reftotal"); // (REF_TOTAL, referrer) -> u64 cumulative bonus
+const REF_COUNT: Symbol = symbol_short!("refcount"); // (REF_COUNT, referrer) -> u64 referrals rewarded
+const REF_CONFIG_EVENT: Symbol = symbol_short!("refcfg");
+const REF_BONUS_EVENT: Symbol = symbol_short!("refbonus");
+// Upper bound on the configurable rate (1000%) to guard against fat-finger
+// configuration and keep `qualifying_amount * rate_bps` comfortably in range.
+const MAX_REFERRAL_RATE_BPS: u32 = 100_000;
 
 #[contract]
 pub struct RewardsContract;
@@ -142,6 +179,23 @@ fn require_admin(env: &Env, admin: &Address) -> Result<(), Error> {
     if &stored_admin != admin {
         return Err(Error::Unauthorized);
     }
+
+    Ok(())
+}
+
+fn require_admin_with_nonce(env: &Env, admin: &Address, nonce: i128) -> Result<(), Error> {
+    admin.require_auth();
+
+    let stored_admin: Address = env.storage().instance().get(&ADMIN).unwrap();
+    if &stored_admin != admin {
+        return Err(Error::Unauthorized);
+    }
+
+    let current: i128 = env.storage().instance().get(&ADMIN_NONCE).unwrap_or(0);
+    if nonce != current {
+        return Err(Error::InvalidAdminNonce);
+    }
+    env.storage().instance().set(&ADMIN_NONCE, &(current + 1));
 
     Ok(())
 }
@@ -224,7 +278,9 @@ impl RewardsContract {
         env.storage()
             .instance()
             .set(&SCHEMA_VERSION, &CURRENT_SCHEMA_VERSION);
-        env.storage().instance().extend_ttl(TTL_THRESHOLD, TTL_EXTEND_TO);
+        env.storage()
+            .instance()
+            .extend_ttl(TTL_THRESHOLD, TTL_EXTEND_TO);
         Ok(CURRENT_SCHEMA_VERSION)
     }
 
@@ -236,7 +292,9 @@ impl RewardsContract {
             .instance()
             .set(&MAX_CREDIT_PER_CALL, &max_amount);
         env.events().publish((MAX_CREDIT_EVENT,), max_amount);
-        env.storage().instance().extend_ttl(TTL_THRESHOLD, TTL_EXTEND_TO);
+        env.storage()
+            .instance()
+            .extend_ttl(TTL_THRESHOLD, TTL_EXTEND_TO);
         Ok(())
     }
 
@@ -265,7 +323,9 @@ impl RewardsContract {
             .set(&(CAMPAIGN_MULTIPLIER, campaign_id), &multiplier_bps);
         env.events()
             .publish((CAMPAIGN_MULTIPLIER_EVENT, campaign_id), multiplier_bps);
-        env.storage().instance().extend_ttl(TTL_THRESHOLD, TTL_EXTEND_TO);
+        env.storage()
+            .instance()
+            .extend_ttl(TTL_THRESHOLD, TTL_EXTEND_TO);
         Ok(())
     }
 
@@ -310,7 +370,9 @@ impl RewardsContract {
         let new_balance = current.checked_add(amount).ok_or(Error::Overflow)?;
         env.storage().instance().set(&key, &new_balance);
         env.events().publish((CREDIT_EVENT, user), amount);
-        env.storage().instance().extend_ttl(TTL_THRESHOLD, TTL_EXTEND_TO);
+        env.storage()
+            .instance()
+            .extend_ttl(TTL_THRESHOLD, TTL_EXTEND_TO);
         Ok(new_balance)
     }
 
@@ -372,7 +434,9 @@ impl RewardsContract {
             env.events().publish((CREDIT_EVENT, user), amount);
         }
 
-        env.storage().instance().extend_ttl(TTL_THRESHOLD, TTL_EXTEND_TO);
+        env.storage()
+            .instance()
+            .extend_ttl(TTL_THRESHOLD, TTL_EXTEND_TO);
         Ok(())
     }
 
@@ -394,7 +458,9 @@ impl RewardsContract {
             .set(&CLAIMED, &total.saturating_add(amount));
 
         env.events().publish((CLAIM_EVENT, user), amount);
-        env.storage().instance().extend_ttl(TTL_THRESHOLD, TTL_EXTEND_TO);
+        env.storage()
+            .instance()
+            .extend_ttl(TTL_THRESHOLD, TTL_EXTEND_TO);
         Ok(new_balance)
     }
 
@@ -426,7 +492,9 @@ impl RewardsContract {
         env.storage().instance().set(&to_key, &new_to_balance);
 
         env.events().publish((TRANSFER_EVENT, from, to), amount);
-        env.storage().instance().extend_ttl(TTL_THRESHOLD, TTL_EXTEND_TO);
+        env.storage()
+            .instance()
+            .extend_ttl(TTL_THRESHOLD, TTL_EXTEND_TO);
         Ok(())
     }
 
@@ -458,7 +526,9 @@ impl RewardsContract {
         env.storage().instance().set(&PENDING_ADMIN, &new_admin);
         env.events()
             .publish((ADMIN_PROPOSED_EVENT, current_admin), new_admin);
-        env.storage().instance().extend_ttl(TTL_THRESHOLD, TTL_EXTEND_TO);
+        env.storage()
+            .instance()
+            .extend_ttl(TTL_THRESHOLD, TTL_EXTEND_TO);
         Ok(())
     }
 
@@ -477,9 +547,10 @@ impl RewardsContract {
         }
         env.storage().instance().set(&ADMIN, &new_admin);
         env.storage().instance().remove(&PENDING_ADMIN);
-        env.events()
-            .publish((ADMIN_ACCEPTED_EVENT,), new_admin);
-        env.storage().instance().extend_ttl(TTL_THRESHOLD, TTL_EXTEND_TO);
+        env.events().publish((ADMIN_ACCEPTED_EVENT,), new_admin);
+        env.storage()
+            .instance()
+            .extend_ttl(TTL_THRESHOLD, TTL_EXTEND_TO);
         Ok(())
     }
 
@@ -487,7 +558,9 @@ impl RewardsContract {
     pub fn cancel_admin_transfer(env: Env, current_admin: Address) -> Result<(), Error> {
         require_admin(&env, &current_admin)?;
         env.storage().instance().remove(&PENDING_ADMIN);
-        env.storage().instance().extend_ttl(TTL_THRESHOLD, TTL_EXTEND_TO);
+        env.storage()
+            .instance()
+            .extend_ttl(TTL_THRESHOLD, TTL_EXTEND_TO);
         Ok(())
     }
 
@@ -496,7 +569,9 @@ impl RewardsContract {
         require_admin(&env, &admin)?;
         env.storage().instance().set(&PAUSED, &paused);
         env.events().publish((PAUSED_EVENT,), paused);
-        env.storage().instance().extend_ttl(TTL_THRESHOLD, TTL_EXTEND_TO);
+        env.storage()
+            .instance()
+            .extend_ttl(TTL_THRESHOLD, TTL_EXTEND_TO);
         Ok(())
     }
 
@@ -519,7 +594,9 @@ impl RewardsContract {
 
         env.events()
             .publish((Symbol::new(&env, "set_tiers"), campaign_id), ());
-        env.storage().instance().extend_ttl(TTL_THRESHOLD, TTL_EXTEND_TO);
+        env.storage()
+            .instance()
+            .extend_ttl(TTL_THRESHOLD, TTL_EXTEND_TO);
         Ok(())
     }
 
@@ -531,7 +608,9 @@ impl RewardsContract {
 
         env.events()
             .publish((Symbol::new(&env, "clear_tiers"), campaign_id), ());
-        env.storage().instance().extend_ttl(TTL_THRESHOLD, TTL_EXTEND_TO);
+        env.storage()
+            .instance()
+            .extend_ttl(TTL_THRESHOLD, TTL_EXTEND_TO);
         Ok(())
     }
 
@@ -561,7 +640,9 @@ impl RewardsContract {
         rank: u64,
         campaign_id: u64,
     ) -> Result<u64, Error> {
-        from.require_auth();
+        // `Self::credit` below already calls `from.require_auth()`; calling it
+        // again here would double-authorize the same address in one frame and
+        // trip the host's `Auth(ExistingValue)` guard.
         ensure_not_paused(&env)?;
 
         let points = Self::get_tier_for_rank(env.clone(), rank, campaign_id);
@@ -589,7 +670,9 @@ impl RewardsContract {
         env.storage().instance().set(&RATE_LIM_WIN, &window_ledgers);
         env.events()
             .publish((RATE_LIM_SET_EVENT,), (max_calls, window_ledgers));
-        env.storage().instance().extend_ttl(TTL_THRESHOLD, TTL_EXTEND_TO);
+        env.storage()
+            .instance()
+            .extend_ttl(TTL_THRESHOLD, TTL_EXTEND_TO);
         Ok(())
     }
 
@@ -637,7 +720,9 @@ impl RewardsContract {
 
         env.events()
             .publish((SNAPSHOT_EVENT, snapshot_id), ledger_number);
-        env.storage().instance().extend_ttl(TTL_THRESHOLD, TTL_EXTEND_TO);
+        env.storage()
+            .instance()
+            .extend_ttl(TTL_THRESHOLD, TTL_EXTEND_TO);
         Ok(())
     }
 
@@ -696,7 +781,9 @@ impl RewardsContract {
 
         env.events()
             .publish((VESTED_CREDIT_EVENT, user), (vest_id, total_amount));
-        env.storage().instance().extend_ttl(TTL_THRESHOLD, TTL_EXTEND_TO);
+        env.storage()
+            .instance()
+            .extend_ttl(TTL_THRESHOLD, TTL_EXTEND_TO);
         Ok(vest_id)
     }
 
@@ -748,7 +835,9 @@ impl RewardsContract {
 
         env.events()
             .publish((VESTED_CLAIM_EVENT, user), (vest_id, amount));
-        env.storage().instance().extend_ttl(TTL_THRESHOLD, TTL_EXTEND_TO);
+        env.storage()
+            .instance()
+            .extend_ttl(TTL_THRESHOLD, TTL_EXTEND_TO);
         Ok(available - amount)
     }
 
@@ -781,7 +870,7 @@ impl RewardsContract {
         rate_bps: u32,
     ) -> Result<(), Error> {
         require_admin_with_nonce(&env, &admin, nonce)?;
-        
+
         if rate_bps == 0 {
             return Err(Error::InvalidRedemptionRate);
         }
@@ -789,7 +878,7 @@ impl RewardsContract {
         env.storage().instance().set(&REDEMPTION_ASSET, &asset);
         env.storage().instance().set(&REDEMPTION_RATE, &rate_bps);
         env.storage().instance().extend_ttl(50, 100);
-        
+
         Ok(())
     }
 
@@ -798,7 +887,7 @@ impl RewardsContract {
     pub fn redemption_rate(env: Env) -> Option<(Address, u32)> {
         let asset: Option<Address> = env.storage().instance().get(&REDEMPTION_ASSET);
         let rate: Option<u32> = env.storage().instance().get(&REDEMPTION_RATE);
-        
+
         match (asset, rate) {
             (Some(a), Some(r)) => Some((a, r)),
             _ => None,
@@ -807,7 +896,10 @@ impl RewardsContract {
 
     /// Get current redemption reserve balance.
     pub fn redemption_reserve(env: Env) -> u64 {
-        env.storage().instance().get(&REDEMPTION_RESERVE).unwrap_or(0)
+        env.storage()
+            .instance()
+            .get(&REDEMPTION_RESERVE)
+            .unwrap_or(0)
     }
 
     /// Redeem points for asset tokens.
@@ -822,7 +914,7 @@ impl RewardsContract {
             .instance()
             .get(&REDEMPTION_ASSET)
             .ok_or(Error::InvalidRedemptionRate)?;
-        
+
         let rate_bps: u32 = env
             .storage()
             .instance()
@@ -834,14 +926,18 @@ impl RewardsContract {
             .checked_mul(rate_bps as u128)
             .ok_or(Error::Overflow)?
             / BPS_DENOMINATOR;
-        
+
         if asset_amount_u128 > i128::MAX as u128 {
             return Err(Error::Overflow);
         }
         let asset_amount = asset_amount_u128 as i128;
 
         // Check reserve
-        let current_reserve: u64 = env.storage().instance().get(&REDEMPTION_RESERVE).unwrap_or(0);
+        let current_reserve: u64 = env
+            .storage()
+            .instance()
+            .get(&REDEMPTION_RESERVE)
+            .unwrap_or(0);
         if (asset_amount as u64) > current_reserve {
             return Err(Error::InsufficientReserve);
         }
@@ -856,7 +952,9 @@ impl RewardsContract {
 
         // Update reserve
         let new_reserve = current_reserve.saturating_sub(asset_amount as u64);
-        env.storage().instance().set(&REDEMPTION_RESERVE, &new_reserve);
+        env.storage()
+            .instance()
+            .set(&REDEMPTION_RESERVE, &new_reserve);
 
         // Transfer asset tokens to user using SAC
         use soroban_sdk::token;
@@ -864,7 +962,8 @@ impl RewardsContract {
         token_client.transfer(&env.current_contract_address(), &user, &asset_amount);
 
         // Emit redeem event
-        env.events().publish((REDEEM_EVENT, user), (points_amount, asset_amount));
+        env.events()
+            .publish((REDEEM_EVENT, user), (points_amount, asset_amount));
         env.storage().instance().extend_ttl(50, 100);
 
         Ok(())
@@ -886,13 +985,19 @@ impl RewardsContract {
             .get(&REDEMPTION_ASSET)
             .ok_or(Error::InvalidRedemptionRate)?;
 
-        let current_reserve: u64 = env.storage().instance().get(&REDEMPTION_RESERVE).unwrap_or(0);
+        let current_reserve: u64 = env
+            .storage()
+            .instance()
+            .get(&REDEMPTION_RESERVE)
+            .unwrap_or(0);
         if amount > current_reserve {
             return Err(Error::InsufficientReserve);
         }
 
         let new_reserve = current_reserve.saturating_sub(amount);
-        env.storage().instance().set(&REDEMPTION_RESERVE, &new_reserve);
+        env.storage()
+            .instance()
+            .set(&REDEMPTION_RESERVE, &new_reserve);
 
         // Transfer tokens to admin
         use soroban_sdk::token;
@@ -917,15 +1022,184 @@ impl RewardsContract {
         // Transfer tokens from caller to contract
         use soroban_sdk::token;
         let token_client = token::Client::new(&env, &asset_address);
-        token_client.transfer(&from, &env.current_contract_address(), &(amount as i128));
+        token_client.transfer(&from, env.current_contract_address(), &(amount as i128));
 
         // Update reserve
-        let current_reserve: u64 = env.storage().instance().get(&REDEMPTION_RESERVE).unwrap_or(0);
+        let current_reserve: u64 = env
+            .storage()
+            .instance()
+            .get(&REDEMPTION_RESERVE)
+            .unwrap_or(0);
         let new_reserve = current_reserve.checked_add(amount).ok_or(Error::Overflow)?;
-        env.storage().instance().set(&REDEMPTION_RESERVE, &new_reserve);
+        env.storage()
+            .instance()
+            .set(&REDEMPTION_RESERVE, &new_reserve);
 
         env.storage().instance().extend_ttl(50, 100);
         Ok(())
+    }
+
+    // ── Referral rewards ─────────────────────────────────────────────────────
+
+    /// Configure the on-chain referral reward engine (admin only).
+    ///
+    /// `rate_bps` is the referrer bonus as basis points of a referee's
+    /// qualifying amount (`bonus = qualifying_amount * rate_bps / 10_000`) and
+    /// must be in `1..=MAX_REFERRAL_RATE_BPS`. `per_referrer_cap` is the maximum
+    /// cumulative bonus a single referrer may earn; `0` means uncapped.
+    pub fn set_referral_config(
+        env: Env,
+        admin: Address,
+        rate_bps: u32,
+        per_referrer_cap: u64,
+    ) -> Result<(), Error> {
+        require_admin(&env, &admin)?;
+        if rate_bps == 0 || rate_bps > MAX_REFERRAL_RATE_BPS {
+            return Err(Error::InvalidReferralConfig);
+        }
+        env.storage().instance().set(&REF_RATE, &rate_bps);
+        env.storage().instance().set(&REF_CAP, &per_referrer_cap);
+        env.events()
+            .publish((REF_CONFIG_EVENT,), (rate_bps, per_referrer_cap));
+        env.storage()
+            .instance()
+            .extend_ttl(TTL_THRESHOLD, TTL_EXTEND_TO);
+        Ok(())
+    }
+
+    /// Returns the referral configuration as `(rate_bps, per_referrer_cap)`.
+    /// Defaults to `(0, 0)` when referral rewards have not been configured.
+    pub fn referral_config(env: Env) -> (u32, u64) {
+        let rate: u32 = env.storage().instance().get(&REF_RATE).unwrap_or(0);
+        let cap: u64 = env.storage().instance().get(&REF_CAP).unwrap_or(0);
+        (rate, cap)
+    }
+
+    /// Pay a referrer the configured bonus for a referee's qualifying action
+    /// (admin only). Enforces the anti-abuse invariants on-chain:
+    ///
+    /// - **self-referral**: `referrer == referee` is rejected.
+    /// - **circular**: rejected when `referrer` was itself previously rewarded as
+    ///   a referee of `referee` (an `A → B` then `B → A` cycle).
+    /// - **uniqueness / sybil gate**: each `referee` can trigger at most one
+    ///   referral bonus, ever — making the payout idempotent and all-or-nothing.
+    /// - **per-referrer cap**: the referrer's cumulative bonus may not exceed the
+    ///   configured cap.
+    ///
+    /// On success the bonus is credited to `referrer`'s balance (emitting the
+    /// standard `credit` event so balance indexers stay consistent) and a
+    /// `ref_bonus` event is published for attribution/instrumentation. Returns
+    /// the bonus amount credited.
+    pub fn pay_referral_bonus(
+        env: Env,
+        admin: Address,
+        referrer: Address,
+        referee: Address,
+        qualifying_amount: u64,
+    ) -> Result<u64, Error> {
+        require_admin(&env, &admin)?;
+        ensure_not_paused(&env)?;
+
+        let rate_bps: u32 = env.storage().instance().get(&REF_RATE).unwrap_or(0);
+        if rate_bps == 0 {
+            return Err(Error::ReferralNotConfigured);
+        }
+        if referrer == referee {
+            return Err(Error::SelfReferral);
+        }
+
+        // Uniqueness / replay: a referee may only ever be rewarded once.
+        let referee_key = (REF_PAID, referee.clone());
+        let already: Option<Address> = env.storage().instance().get(&referee_key);
+        if already.is_some() {
+            return Err(Error::ReferralAlreadyRewarded);
+        }
+
+        // Circular: reject if the referrer was previously rewarded as a referee
+        // of this referee (A referred B; now B is trying to refer A).
+        let prior_for_referrer: Option<Address> =
+            env.storage().instance().get(&(REF_PAID, referrer.clone()));
+        if prior_for_referrer == Some(referee.clone()) {
+            return Err(Error::CircularReferral);
+        }
+
+        // bonus = qualifying_amount * rate_bps / 10_000 (floor division).
+        let bonus_u128 = (qualifying_amount as u128)
+            .checked_mul(rate_bps as u128)
+            .ok_or(Error::Overflow)?
+            / BPS_DENOMINATOR;
+        if bonus_u128 > u64::MAX as u128 {
+            return Err(Error::Overflow);
+        }
+        let bonus = bonus_u128 as u64;
+        if bonus == 0 {
+            return Err(Error::ZeroReferralBonus);
+        }
+
+        // Per-referrer cap (0 = uncapped).
+        let cap: u64 = env.storage().instance().get(&REF_CAP).unwrap_or(0);
+        let prior_total: u64 = env
+            .storage()
+            .instance()
+            .get(&(REF_TOTAL, referrer.clone()))
+            .unwrap_or(0);
+        let new_total = prior_total.checked_add(bonus).ok_or(Error::Overflow)?;
+        if cap > 0 && new_total > cap {
+            return Err(Error::ReferralCapExceeded);
+        }
+
+        // Credit the referrer's balance (same storage as `credit`).
+        let balance_key = (BALANCE, referrer.clone());
+        let current: u64 = env.storage().instance().get(&balance_key).unwrap_or(0);
+        let new_balance = current.checked_add(bonus).ok_or(Error::Overflow)?;
+        env.storage().instance().set(&balance_key, &new_balance);
+
+        // Record attribution edge + per-referrer counters.
+        env.storage().instance().set(&referee_key, &referrer);
+        env.storage()
+            .instance()
+            .set(&(REF_TOTAL, referrer.clone()), &new_total);
+        let prior_count: u64 = env
+            .storage()
+            .instance()
+            .get(&(REF_COUNT, referrer.clone()))
+            .unwrap_or(0);
+        env.storage().instance().set(
+            &(REF_COUNT, referrer.clone()),
+            &prior_count.saturating_add(1),
+        );
+
+        env.events()
+            .publish((CREDIT_EVENT, referrer.clone()), bonus);
+        env.events().publish(
+            (REF_BONUS_EVENT, referrer, referee),
+            (bonus, qualifying_amount),
+        );
+        env.storage()
+            .instance()
+            .extend_ttl(TTL_THRESHOLD, TTL_EXTEND_TO);
+        Ok(bonus)
+    }
+
+    /// Cumulative referral bonus credited to `referrer`.
+    pub fn referral_bonus_total(env: Env, referrer: Address) -> u64 {
+        env.storage()
+            .instance()
+            .get(&(REF_TOTAL, referrer))
+            .unwrap_or(0)
+    }
+
+    /// Number of referees `referrer` has been rewarded for.
+    pub fn referral_reward_count(env: Env, referrer: Address) -> u64 {
+        env.storage()
+            .instance()
+            .get(&(REF_COUNT, referrer))
+            .unwrap_or(0)
+    }
+
+    /// The referrer that was rewarded for `referee`, if any.
+    pub fn rewarded_referrer_of(env: Env, referee: Address) -> Option<Address> {
+        env.storage().instance().get(&(REF_PAID, referee))
     }
 }
 
@@ -954,3 +1228,6 @@ fn sort_tiers(_env: &Env, tiers: Vec<(u64, u64)>) -> Vec<(u64, u64)> {
 
 #[cfg(test)]
 mod test;
+
+#[cfg(test)]
+mod fuzz_test;

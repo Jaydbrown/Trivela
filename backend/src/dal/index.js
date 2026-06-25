@@ -1,7 +1,10 @@
 import Database from 'better-sqlite3';
 import { runMigrations } from '../db/migrate.js';
 import { assertCampaignRepository } from './campaignRepository.js';
-import { createSqliteCampaignRepository, parseCategoriesConfig } from './sqliteCampaignRepository.js';
+import {
+  createSqliteCampaignRepository,
+  parseCategoriesConfig,
+} from './sqliteCampaignRepository.js';
 import { assertAuditLogRepository } from './auditLogRepository.js';
 import { createSqliteAuditLogRepository } from './sqliteAuditLogRepository.js';
 import { WebhookRepository } from './webhookRepository.js';
@@ -9,8 +12,13 @@ import { createSqliteReferralRepository } from './sqliteReferralRepository.js';
 import { assertApiKeyRepository } from './apiKeyRepository.js';
 import { createSqliteApiKeyRepository } from './sqliteApiKeyRepository.js';
 import { createSqliteFailedJobRepository } from './sqliteFailedJobRepository.js';
+import { createSqliteVariantRepository } from './sqliteVariantRepository.js';
+import { createSqliteCohortRepository } from './sqliteCohortRepository.js';
+import { createSqlitePushSubscriptionRepository } from './sqlitePushSubscriptionRepository.js';
 import { createPool, isPostgresUrl } from './pg/pgClient.js';
 import { createSqliteAllowlistRepository } from './sqliteAllowlistRepository.js';
+import { createSqliteOrgMemberRepository } from './sqliteOrgMemberRepository.js';
+import { createSqliteUsageRepository } from './sqliteUsageRepository.js';
 
 import { runPgMigrations } from './pg/migrate.js';
 import { createPgCampaignRepository } from './pg/pgCampaignRepository.js';
@@ -40,7 +48,6 @@ export async function createDal({
   allowedCategories,
   allowlistRepository,
 } = {}) {
-
   const db = new Database(dbPath);
   await runMigrations(db);
 
@@ -62,26 +69,27 @@ export async function createDal({
 
   return {
     campaigns: assertCampaignRepository(
-      campaignRepository
-        ?? pgCampaigns
-        ?? createSqliteCampaignRepository({
+      campaignRepository ??
+        pgCampaigns ??
+        createSqliteCampaignRepository({
           db,
           seed: campaigns,
           allowedCategories: categories,
         }),
     ),
     auditLogs: assertAuditLogRepository(
-      auditLogRepository
-        ?? pgAuditLogs
-        ?? createSqliteAuditLogRepository({ db }),
+      auditLogRepository ?? pgAuditLogs ?? createSqliteAuditLogRepository({ db }),
     ),
     webhooks: webhookRepository ?? new WebhookRepository(db),
     referrals: createSqliteReferralRepository({ db }),
-    apiKeys: assertApiKeyRepository(
-      apiKeyRepository ?? createSqliteApiKeyRepository({ db }),
-    ),
+    variants: createSqliteVariantRepository({ db }),
+    cohorts: createSqliteCohortRepository({ db }),
+    pushSubscriptions: createSqlitePushSubscriptionRepository({ db }),
+    apiKeys: assertApiKeyRepository(apiKeyRepository ?? createSqliteApiKeyRepository({ db })),
     failedJobs: failedJobRepository ?? createSqliteFailedJobRepository({ db }),
     allowlists: allowlistRepository ?? createSqliteAllowlistRepository({ db }),
+    orgMembers: createSqliteOrgMemberRepository({ db }),
+    usage: createSqliteUsageRepository({ db }),
     db,
     pgPool,
   };

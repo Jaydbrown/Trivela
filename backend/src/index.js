@@ -19,6 +19,7 @@ import { pathToFileURL } from 'node:url';
 import Redis from 'ioredis';
 import createApiKeyAuth, { createMasterKeyAuth } from './middleware/apiKeyAuth.js';
 import { createRateLimiter, createRedisStore } from './middleware/rateLimit.js';
+import { createAuthLockout } from './middleware/authLockout.js';
 import requestLogger, { log } from './middleware/logger.js';
 import requestId from './middleware/requestId.js';
 import securityHeaders from './middleware/securityHeaders.js';
@@ -47,13 +48,31 @@ import {
 import { buildCampaignStats } from './services/campaignStatsService.js';
 import { generateAllowlist } from './lib/allowlist/merkle.js';
 import { parseAllowlistCsv, validateGAddress, MAX_ALLOWLIST_ROWS } from './lib/allowlist/csv.js';
+import { createEmbedRoute } from './routes/embed.js';
+import { createVariantRoutes } from './routes/variants.js';
+import { createVariantService } from './services/variantService.js';
+import { createCohortRoutes } from './routes/cohorts.js';
+import { createCohortService } from './services/cohortService.js';
+import { createPushRoutes } from './routes/push.js';
+import { createOrgRoutes } from './routes/orgs.js';
+import { createAuditRouter } from './routes/audit.js';
+import { createAuditLogService } from './services/auditLogService.js';
+import { createWebPushService } from './services/webPushService.js';
+import { createUsageMeteringService } from './services/usageMeteringService.js';
+import { createUsageMeteringMiddleware } from './middleware/usageMetering.js';
+import { requestTimeout } from './middleware/timeout.js';
+import { PoolSaturatedError } from './rpcPool.js';
 
 const DEFAULT_PORT = 3001;
 const DEFAULT_RATE_LIMIT_WINDOW_MS = 60_000;
 const DEFAULT_RATE_LIMIT_MAX_REQUESTS = 60;
+const DEFAULT_AUTH_LOCKOUT_SOFT_THRESHOLD = 5;
+const DEFAULT_AUTH_LOCKOUT_HARD_THRESHOLD = 10;
+const DEFAULT_AUTH_LOCKOUT_BASE_LOCKOUT_MS = 60_000;
 const DEFAULT_SHORT_CACHE_TTL_MS = 5_000;
 const DEFAULT_JSON_BODY_LIMIT = '100kb';
 const DEFAULT_RPC_POLL_INTERVAL_MS = 60_000;
+const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
 const LEGACY_API_PREFIX = '/api';
 const API_V1_PREFIX = '/api/v1';
 const CONTRACT_ID_PATTERN = /^C[A-Z2-7]{55}$/;
@@ -201,6 +220,20 @@ export async function createApp(options = {}) {
     DEFAULT_RATE_LIMIT_MAX_REQUESTS,
   );
 
+  const authLockoutOptions = /** @type {any} */ (options.authLockout) ?? {};
+  const authLockoutSoftThreshold = normalizePositiveInteger(
+    authLockoutOptions.softThreshold ?? process.env.AUTH_LOCKOUT_SOFT_THRESHOLD,
+    DEFAULT_AUTH_LOCKOUT_SOFT_THRESHOLD,
+  );
+  const authLockoutHardThreshold = normalizePositiveInteger(
+    authLockoutOptions.hardThreshold ?? process.env.AUTH_LOCKOUT_HARD_THRESHOLD,
+    DEFAULT_AUTH_LOCKOUT_HARD_THRESHOLD,
+  );
+  const authLockoutBaseMs = normalizePositiveInteger(
+    authLockoutOptions.baseLockoutMs ?? process.env.AUTH_LOCKOUT_BASE_MS,
+    DEFAULT_AUTH_LOCKOUT_BASE_LOCKOUT_MS,
+  );
+
   const seed = /** @type {any[]} */ (options.campaigns) ?? defaultSeed();
   const dbPath = /** @type {string} */ (options.dbPath) ?? process.env.DB_PATH ?? './trivela.db';
   const dal = await createDal({
@@ -213,11 +246,14 @@ export async function createApp(options = {}) {
   const auditLogRepository = dal.auditLogs;
   const webhookRepository = dal.webhooks;
   const referralRepository = dal.referrals;
+  const variantRepository = dal.variants;
+  const cohortRepository = dal.cohorts;
+  const pushSubscriptionRepository = dal.pushSubscriptions;
   const apiKeyRepository = dal.apiKeys;
   const failedJobRepository = options.failedJobRepository ?? dal.failedJobs;
   const allowlistRepository = dal.allowlists;
-
-  const requireAdminMasterKey = requireMasterKey;
+  const orgMemberRepository = dal.orgMembers;
+  const usageRepository = options.usageRepository ?? dal.usage;
 
   const storageAdapter = /** @type {import('./storage/storageAdapter.js').StorageAdapter} */ (
     options.storageAdapter ?? createStorageAdapter(process.env)
@@ -228,6 +264,21 @@ export async function createApp(options = {}) {
   });
   const webhookService = new WebhookService(webhookRepository, {
     fetchImpl,
+    logger: log,
+  });
+  const variantService = createVariantService({ variantRepo: variantRepository });
+  const cohortService = createCohortService({ cohortRepo: cohortRepository });
+  const auditLogService = createAuditLogService({
+    auditLogRepository,
+    orgMemberRepository,
+  });
+  const webPushService = createWebPushService({
+    repository: pushSubscriptionRepository,
+    vapid: {
+      publicKey: process.env.VAPID_PUBLIC_KEY,
+      privateKey: process.env.VAPID_PRIVATE_KEY,
+      subject: process.env.VAPID_SUBJECT,
+    },
     logger: log,
   });
   const shortCacheTtlMs = normalizePositiveInteger(
@@ -257,7 +308,24 @@ export async function createApp(options = {}) {
     requestTotal: 0,
     requestErrors: 0,
     routeHits: new Map(),
+    authFailures: 0,
+    authLockouts: 0,
+    // p95 latency histogram — 12 buckets (ms): 50,100,200,500,1000,2000,5000,...
+    latencyBuckets: [50, 100, 200, 500, 1_000, 2_000, 5_000, 10_000, 30_000, Infinity],
+    latencyCounts: /** @type {number[]} */ ([]),
+    latencyTotal: 0,
+    latencySum: 0,
   };
+  // Initialise bucket counters to 0.
+  metrics.latencyCounts = metrics.latencyBuckets.map(() => 0);
+
+  // Apply global request deadline so every route self-defends against slow
+  // upstreams.  The timeout is configurable via REQUEST_TIMEOUT_MS.
+  const requestTimeoutMs = normalizePositiveInteger(
+    options.requestTimeoutMs ?? process.env.REQUEST_TIMEOUT_MS,
+    DEFAULT_REQUEST_TIMEOUT_MS,
+  );
+  app.use(requestTimeout(requestTimeoutMs));
 
   /**
    * Compatibility shim: ?api_version=v0 rewrites v1 routes to legacy patterns
@@ -274,20 +342,56 @@ export async function createApp(options = {}) {
     next();
   });
 
-  const requireApiKey = createApiKeyAuth({
-    apiKeys:
-      /** @type {string} */ (options.apiKeys) ??
-      /** @type {string} */ (options.apiKey) ??
-      process.env.TRIVELA_API_KEYS ??
-      process.env.TRIVELA_API_KEY ??
-      '',
-    apiKeyRepository: options.apiKeyRepository ?? apiKeyRepository,
-  });
-  const requireMasterKey = createMasterKeyAuth({
-    masterKey: /** @type {string} */ (options.masterKey) ?? process.env.TRIVELA_MASTER_KEY ?? '',
+  // Brute-force / credential-stuffing guard (#588). Runs immediately before the
+  // auth middleware on every protected route; a spike in failures/lockouts is
+  // surfaced via the trivela_auth_* counters and structured warn logs.
+  const authGuard = createAuthLockout({
+    softThreshold: authLockoutSoftThreshold,
+    hardThreshold: authLockoutHardThreshold,
+    baseLockoutMs: authLockoutBaseMs,
+    timeProvider: authLockoutOptions.timeProvider,
+    delayFn: authLockoutOptions.delayFn,
+    store: authLockoutOptions.store,
+    onFailure: ({ key, failures }) => {
+      metrics.authFailures += 1;
+      log.warn({ key, failures }, 'Failed authentication attempt');
+    },
+    onLockout: ({ key, failures, lockoutMs, lockoutCount }) => {
+      metrics.authLockouts += 1;
+      log.warn(
+        { key, failures, lockoutMs, lockoutCount },
+        'Authentication lockout triggered (possible brute-force)',
+      );
+    },
   });
 
+  // Auth middlewares are exposed as [authGuard, requireX] arrays; Express
+  // flattens nested handler arrays, so existing route registrations pick up the
+  // guard with no change. Only auth-bearing routes are guarded, which keeps a
+  // 200 on a public route from ever resetting an attacker's failure counter.
+  const requireApiKey = [
+    authGuard,
+    createApiKeyAuth({
+      apiKeys:
+        /** @type {string} */ (options.apiKeys) ??
+        /** @type {string} */ (options.apiKey) ??
+        process.env.TRIVELA_API_KEYS ??
+        process.env.TRIVELA_API_KEY ??
+        '',
+      apiKeyRepository: options.apiKeyRepository ?? apiKeyRepository,
+      orgMemberRepository: options.orgMemberRepository ?? orgMemberRepository,
+    }),
+  ];
+  const requireMasterKey = [
+    authGuard,
+    createMasterKeyAuth({
+      masterKey: /** @type {string} */ (options.masterKey) ?? process.env.TRIVELA_MASTER_KEY ?? '',
+    }),
+  ];
+  const requireAdminMasterKey = requireMasterKey;
+
   let rateLimitStore = null;
+  let usageRedisClient = null;
   const redisUrl = process.env.REDIS_URL || process.env.REDIS_HOST;
   if (redisUrl && !options.disableRedis) {
     try {
@@ -300,6 +404,7 @@ export async function createApp(options = {}) {
         log.error({ err }, 'Redis connection error');
       });
       rateLimitStore = createRedisStore(redisClient);
+      usageRedisClient = redisClient;
       log.info(
         { redisUrl: redisUrl.replace(/:[^:@]+@/, ':***@') },
         'Rate limiter using Redis store',
@@ -311,6 +416,15 @@ export async function createApp(options = {}) {
       );
     }
   }
+
+  const usageMeteringService = createUsageMeteringService({
+    usageRepository,
+    redisClient: usageRedisClient ?? /** @type {any} */ (options.usageRedisClient) ?? null,
+    timeProvider: /** @type {any} */ (options.usageMeteringService)?.timeProvider,
+  });
+  const stopUsageFlush = usageMeteringService.startFlushInterval();
+
+  const usageMeteringMiddleware = createUsageMeteringMiddleware({ usageMeteringService });
 
   const rateLimiter = createRateLimiter({
     windowMs: rateLimitWindowMs,
@@ -351,11 +465,22 @@ export async function createApp(options = {}) {
       /** @type {import('express').NextFunction} */ next,
     ) => {
       metrics.requestTotal += 1;
+      const _reqStart = Date.now();
       res.on('finish', () => {
         const routeKey = `${req.method} ${req.path}`;
         metrics.routeHits.set(routeKey, (metrics.routeHits.get(routeKey) ?? 0) + 1);
         if (res.statusCode >= 400) {
           metrics.requestErrors += 1;
+        }
+        // Record request duration into the latency histogram.
+        const durationMs = Date.now() - _reqStart;
+        metrics.latencySum += durationMs;
+        metrics.latencyTotal += 1;
+        for (let _bi = 0; _bi < metrics.latencyBuckets.length; _bi++) {
+          if (durationMs <= metrics.latencyBuckets[_bi]) {
+            metrics.latencyCounts[_bi] += 1;
+            break;
+          }
         }
       });
       next();
@@ -476,6 +601,7 @@ export async function createApp(options = {}) {
         entity,
         entityId,
         diff,
+        orgId: req.auth?.orgId || null,
         timestamp: new Date().toISOString(),
       });
     } catch (error) {
@@ -487,6 +613,26 @@ export async function createApp(options = {}) {
     const payload = await buildHealthPayload();
     res.json(payload);
   });
+
+  const siteOrigin =
+    process.env.SITE_ORIGIN ?? allowedOrigins.find((origin) => origin !== '*') ?? '';
+
+  // Embed endpoints use a tighter per-IP rate limit (30 req/min) to guard
+  // against scraping while still allowing reasonable widget traffic.
+  const embedRateLimiter = createRateLimiter({
+    windowMs: rateLimitWindowMs,
+    maxRequests: Math.min(30, rateLimitMaxRequests),
+    timeProvider: /** @type {any} */ (options.rateLimit)?.timeProvider,
+    store: rateLimitStore,
+  });
+
+  app.get(
+    '/embed/campaign/:id',
+    embedRateLimiter,
+    createEmbedRoute(campaignRepository, siteOrigin, {
+      embedSecret: process.env.EMBED_ATTRIBUTION_SECRET,
+    }),
+  );
 
   app.get('/health/rpc', async (_req, res) => {
     const rpcUrl = rpcPool.getHealthyRpcUrl();
@@ -509,6 +655,18 @@ export async function createApp(options = {}) {
       })
       .join('\n');
 
+    // Latency histogram — cumulative buckets (le = upper bound in ms).
+    const latencyBucketLines = metrics.latencyBuckets
+      .map((le, i) => {
+        const cumulative = metrics.latencyCounts.slice(0, i + 1).reduce((a, b) => a + b, 0);
+        const leLabel = le === Infinity ? '+Inf' : String(le);
+        return `trivela_http_request_duration_ms_bucket{le="${leLabel}"} ${cumulative}`;
+      })
+      .join('\n');
+
+    // RPC pool saturation metrics.
+    const poolStatus = rpcPool.getStatus();
+
     const payload = [
       '# HELP trivela_requests_total Total HTTP requests handled.',
       '# TYPE trivela_requests_total counter',
@@ -516,12 +674,40 @@ export async function createApp(options = {}) {
       '# HELP trivela_request_errors_total Total HTTP requests with status >= 400.',
       '# TYPE trivela_request_errors_total counter',
       `trivela_request_errors_total ${metrics.requestErrors}`,
+      '# HELP trivela_auth_failures_total Total failed authentication attempts on guarded routes.',
+      '# TYPE trivela_auth_failures_total counter',
+      `trivela_auth_failures_total ${metrics.authFailures}`,
+      '# HELP trivela_auth_lockouts_total Total brute-force lockouts triggered on guarded routes.',
+      '# TYPE trivela_auth_lockouts_total counter',
+      `trivela_auth_lockouts_total ${metrics.authLockouts}`,
       '# HELP trivela_process_uptime_seconds Node.js process uptime.',
       '# TYPE trivela_process_uptime_seconds gauge',
       `trivela_process_uptime_seconds ${uptimeSeconds.toFixed(3)}`,
       '# HELP trivela_route_hits_total Route-level request counts.',
       '# TYPE trivela_route_hits_total counter',
       routeLines,
+      // Request latency histogram (issue #650 — p95 latency SLO).
+      '# HELP trivela_http_request_duration_ms HTTP request duration in milliseconds.',
+      '# TYPE trivela_http_request_duration_ms histogram',
+      latencyBucketLines,
+      `trivela_http_request_duration_ms_count ${metrics.latencyTotal}`,
+      `trivela_http_request_duration_ms_sum ${metrics.latencySum}`,
+      // RPC pool saturation (issue #650 — pool saturation safety).
+      '# HELP trivela_rpc_pool_in_use RPC pool slots currently in use.',
+      '# TYPE trivela_rpc_pool_in_use gauge',
+      `trivela_rpc_pool_in_use ${poolStatus.in_use}`,
+      '# HELP trivela_rpc_pool_idle RPC pool slots immediately available.',
+      '# TYPE trivela_rpc_pool_idle gauge',
+      `trivela_rpc_pool_idle ${poolStatus.idle}`,
+      '# HELP trivela_rpc_pool_waiting Callers queued waiting for a pool slot.',
+      '# TYPE trivela_rpc_pool_waiting gauge',
+      `trivela_rpc_pool_waiting ${poolStatus.waiting}`,
+      '# HELP trivela_rpc_pool_healthy Healthy RPC endpoints in the pool.',
+      '# TYPE trivela_rpc_pool_healthy gauge',
+      `trivela_rpc_pool_healthy ${poolStatus.healthy}`,
+      '# HELP trivela_rpc_pool_unhealthy Unhealthy RPC endpoints in the pool.',
+      '# TYPE trivela_rpc_pool_unhealthy gauge',
+      `trivela_rpc_pool_unhealthy ${poolStatus.unhealthy}`,
     ]
       .filter(Boolean)
       .join('\n');
@@ -552,6 +738,9 @@ export async function createApp(options = {}) {
         updateCampaign: `PUT ${API_V1_PREFIX}/campaigns/:id`,
         deleteCampaign: `DELETE ${API_V1_PREFIX}/campaigns/:id`,
         auditLogs: `GET ${API_V1_PREFIX}/audit-logs`,
+        usage: `GET ${API_V1_PREFIX}/usage`,
+        adminUsage: `GET ${API_V1_PREFIX}/admin/usage`,
+        adminUsageQuotas: `PUT ${API_V1_PREFIX}/admin/usage/quotas`,
         config: `GET ${API_V1_PREFIX}/config`,
         explorer: `GET ${API_V1_PREFIX}/explorer`,
       },
@@ -576,6 +765,12 @@ export async function createApp(options = {}) {
         keying: 'per API key when present, otherwise per IP address',
         windowMs: rateLimitWindowMs,
         maxRequests: rateLimitMaxRequests,
+      },
+      authLockout: {
+        keying: 'per client IP address',
+        softThreshold: authLockoutSoftThreshold,
+        hardThreshold: authLockoutHardThreshold,
+        baseLockoutMs: authLockoutBaseMs,
       },
       body: {
         jsonLimit: jsonBodyLimit,
@@ -636,14 +831,12 @@ export async function createApp(options = {}) {
     let status = statusRaw;
 
     if (statusRaw && ['draft', 'archived', 'all'].includes(statusRaw) && !hasApiKey) {
-      // Require API key for non-published statuses
       return res.status(401).json({
         error: 'API key required to access draft, archived, or all campaigns',
         code: 'UNAUTHORIZED',
       });
     }
 
-    // Default to published only for public API
     if (!status && !hasApiKey) {
       status = 'published';
     }
@@ -662,6 +855,32 @@ export async function createApp(options = {}) {
       expiresAt: Date.now() + shortCacheTtlMs,
       payload,
     });
+    res.set('Cache-Control', 'public, max-age=60, stale-while-revalidate=120');
+    return res.set('x-cache', 'MISS').json(payload);
+  }
+
+  /** @param {import('express').Request} req @param {import('express').Response} res */
+  function getTrendingCampaigns(req, res) {
+    const limitRaw = Number.parseInt(String(req.query.limit ?? '6'), 10);
+    const limit = Number.isFinite(limitRaw) && limitRaw > 0 && limitRaw <= 50 ? limitRaw : 6;
+
+    const cacheKey = `trending:${limit}`;
+    const cached = shortCache.get(cacheKey);
+    if (cached && cached.expiresAt > Date.now()) {
+      res.set('Cache-Control', 'public, max-age=60, stale-while-revalidate=120');
+      return res.set('x-cache', 'HIT').json(cached.payload);
+    }
+
+    const all = campaignRepository.list({
+      active: true,
+      sort: 'reward_per_action',
+      order: 'desc',
+    });
+    const data = all.slice(0, limit);
+    const payload = { data, total: data.length };
+
+    shortCache.set(cacheKey, { expiresAt: Date.now() + shortCacheTtlMs, payload });
+    res.set('Cache-Control', 'public, max-age=60, stale-while-revalidate=120');
     return res.set('x-cache', 'MISS').json(payload);
   }
 
@@ -1375,21 +1594,25 @@ export async function createApp(options = {}) {
 
   /** @param {string} prefix */
   function registerApiRoutes(prefix) {
+    // Shorthand: auth + per-tenant api_calls metering in one step.
+    const guard = [requireApiKey, usageMeteringMiddleware];
+
     app.get(prefix, rateLimiter, apiInfo);
     app.get(`${prefix}/config`, rateLimiter, getPublicConfig);
     app.get(`${prefix}/explorer`, rateLimiter, getExplorerLinks);
     app.get(`${prefix}/campaigns`, rateLimiter, listCampaigns);
     app.get(`${prefix}/categories`, rateLimiter, listCategories);
     app.get(`${prefix}/tags`, rateLimiter, listTags);
+    app.get(`${prefix}/campaigns/trending`, rateLimiter, getTrendingCampaigns);
     app.get(`${prefix}/campaigns/by-slug/:slug`, rateLimiter, getCampaignBySlug);
     app.get(`${prefix}/campaigns/:id`, rateLimiter, getCampaignById);
     app.get(`${prefix}/campaigns/:id/stats`, rateLimiter, getCampaignStats);
-    app.get(`${prefix}/audit-logs`, rateLimiter, requireApiKey, listAuditLogs);
+    app.get(`${prefix}/audit-logs`, rateLimiter, ...guard, listAuditLogs);
     app.get(`${prefix}/indexer/cursor`, rateLimiter, getIndexerCursorState);
-    app.post(`${prefix}/indexer/cursor`, rateLimiter, requireApiKey, setIndexerCursorState);
-    app.post(`${prefix}/campaigns`, rateLimiter, requireApiKey, createCampaign);
-    app.post(`${prefix}/campaigns/:id/clone`, rateLimiter, requireApiKey, cloneCampaign);
-    app.post(`${prefix}/campaigns/:id/image`, rateLimiter, requireApiKey, (req, res, next) => {
+    app.post(`${prefix}/indexer/cursor`, rateLimiter, ...guard, setIndexerCursorState);
+    app.post(`${prefix}/campaigns`, rateLimiter, ...guard, createCampaign);
+    app.post(`${prefix}/campaigns/:id/clone`, rateLimiter, ...guard, cloneCampaign);
+    app.post(`${prefix}/campaigns/:id/image`, rateLimiter, ...guard, (req, res, next) => {
       imageUpload.single('image')(req, res, (err) => {
         if (err?.code === 'LIMIT_FILE_SIZE') {
           return res.status(400).json({
@@ -1401,10 +1624,10 @@ export async function createApp(options = {}) {
         return uploadCampaignImageHandler(req, res);
       });
     });
-    app.put(`${prefix}/campaigns/:id`, rateLimiter, requireApiKey, updateCampaign);
-    app.put(`${prefix}/campaigns/:id/publish`, rateLimiter, requireApiKey, publishCampaign);
-    app.put(`${prefix}/campaigns/:id/archive`, rateLimiter, requireApiKey, archiveCampaign);
-    app.delete(`${prefix}/campaigns/:id`, rateLimiter, requireApiKey, deleteCampaign);
+    app.put(`${prefix}/campaigns/:id`, rateLimiter, ...guard, updateCampaign);
+    app.put(`${prefix}/campaigns/:id/publish`, rateLimiter, ...guard, publishCampaign);
+    app.put(`${prefix}/campaigns/:id/archive`, rateLimiter, ...guard, archiveCampaign);
+    app.delete(`${prefix}/campaigns/:id`, rateLimiter, ...guard, deleteCampaign);
 
     app.post(`${prefix}/admin/api-keys`, rateLimiter, requireMasterKey, createApiKeyHandler);
     app.get(`${prefix}/admin/api-keys`, rateLimiter, requireMasterKey, listApiKeysHandler);
@@ -1420,12 +1643,54 @@ export async function createApp(options = {}) {
     app.get(`${prefix}/admin/dashboard`, rateLimiter, requireMasterKey, getAdminDashboard);
     app.get(`${prefix}/admin/campaigns`, rateLimiter, requireMasterKey, listAdminCampaigns);
 
+    // Tenant usage metering (Issue #574)
+    app.get(`${prefix}/usage`, rateLimiter, ...guard, (req, res) => {
+      const orgId = req.auth?.orgId;
+      if (!orgId) {
+        return res.status(403).json({
+          error: 'Usage data is scoped to org-linked API keys.',
+          code: 'NO_ORG_CONTEXT',
+        });
+      }
+      const usage = usageMeteringService.getOrgUsage(orgId);
+      return res.json({ orgId, usage });
+    });
+
+    app.get(`${prefix}/admin/usage`, rateLimiter, requireMasterKey, (_req, res) => {
+      const rows = usageMeteringService.adminExport();
+      return res.json({ usage: rows });
+    });
+
+    app.put(`${prefix}/admin/usage/quotas`, rateLimiter, requireMasterKey, (req, res) => {
+      const {
+        orgId,
+        resource,
+        softLimit = null,
+        hardLimit = null,
+        windowSeconds = 3600,
+      } = req.body ?? {};
+      if (!orgId || !resource) {
+        return res.status(400).json({
+          error: 'orgId and resource are required',
+          code: 'VALIDATION_ERROR',
+        });
+      }
+      const quota = usageRepository.upsertQuota({
+        orgId,
+        resource,
+        softLimit,
+        hardLimit,
+        windowSeconds,
+      });
+      return res.json(quota);
+    });
+
     // Job dead-letter inspection / requeue (Issue #286)
-    app.get(`${prefix}/jobs/failed`, rateLimiter, requireApiKey, listFailedJobsHandler);
-    app.post(`${prefix}/jobs/retry/:id`, rateLimiter, requireApiKey, retryFailedJobHandler);
+    app.get(`${prefix}/jobs/failed`, rateLimiter, ...guard, listFailedJobsHandler);
+    app.post(`${prefix}/jobs/retry/:id`, rateLimiter, ...guard, retryFailedJobHandler);
 
     // Webhook routes (Issue #287)
-    app.post(`${prefix}/webhooks`, rateLimiter, requireApiKey, (req, res) => {
+    app.post(`${prefix}/webhooks`, rateLimiter, ...guard, (req, res) => {
       const { url, events, secret } = req.body;
       if (!url || !Array.isArray(events) || events.length === 0) {
         return res.status(400).json({
@@ -1444,12 +1709,12 @@ export async function createApp(options = {}) {
       return res.status(201).json(webhook);
     });
 
-    app.get(`${prefix}/webhooks`, rateLimiter, requireApiKey, (req, res) => {
+    app.get(`${prefix}/webhooks`, rateLimiter, ...guard, (req, res) => {
       const webhooks = webhookRepository.list();
       return res.json(paginateItems(webhooks, req.query));
     });
 
-    app.get(`${prefix}/webhooks/:id`, rateLimiter, requireApiKey, (req, res) => {
+    app.get(`${prefix}/webhooks/:id`, rateLimiter, ...guard, (req, res) => {
       const webhook = webhookRepository.getById(req.params.id);
       if (!webhook) {
         return res.status(404).json({ error: 'Webhook not found', code: 'WEBHOOK_NOT_FOUND' });
@@ -1457,7 +1722,7 @@ export async function createApp(options = {}) {
       return res.json(webhook);
     });
 
-    app.put(`${prefix}/webhooks/:id`, rateLimiter, requireApiKey, (req, res) => {
+    app.put(`${prefix}/webhooks/:id`, rateLimiter, ...guard, (req, res) => {
       const { url, events, active } = req.body;
       const before = webhookRepository.getById(req.params.id);
       if (!before) {
@@ -1477,7 +1742,7 @@ export async function createApp(options = {}) {
       return res.json(webhook);
     });
 
-    app.delete(`${prefix}/webhooks/:id`, rateLimiter, requireApiKey, (req, res) => {
+    app.delete(`${prefix}/webhooks/:id`, rateLimiter, ...guard, (req, res) => {
       const before = webhookRepository.getById(req.params.id);
       const deleted = webhookRepository.delete(req.params.id);
       if (!deleted) {
@@ -1492,7 +1757,7 @@ export async function createApp(options = {}) {
       return res.status(204).end();
     });
 
-    app.get(`${prefix}/webhooks/:id/deliveries`, rateLimiter, requireApiKey, (req, res) => {
+    app.get(`${prefix}/webhooks/:id/deliveries`, rateLimiter, ...guard, (req, res) => {
       const webhook = webhookRepository.getById(req.params.id);
       if (!webhook) {
         return res.status(404).json({ error: 'Webhook not found', code: 'WEBHOOK_NOT_FOUND' });
@@ -1562,10 +1827,77 @@ export async function createApp(options = {}) {
         bonusEarned,
       });
     });
+
+    // Org + RBAC member management routes (Issue #608)
+    // Registered BEFORE the app.use(prefix, requireApiKey, ...) mounts so that
+    // master-key-only routes (POST /orgs) are not intercepted by the API-key
+    // guard that the variant/cohort/push routers apply at the prefix level.
+    const orgRouter = createOrgRoutes({
+      orgMemberRepository,
+      requireMasterKey,
+      requireApiKey,
+    });
+    app.use(prefix, rateLimiter, orgRouter);
+
+    // Audit log routes for organization-scoped audit logging and activity feeds (Issue #612)
+    const auditRouter = createAuditRouter({
+      auditLogService,
+      requireApiKey,
+    });
+    app.use(prefix, rateLimiter, auditRouter);
+
+    // Variant routes for A/B testing (Issue #624)
+    const variantRouter = createVariantRoutes({
+      variantRepo: variantRepository,
+      variantService,
+      campaignRepo: campaignRepository,
+    });
+    app.use(prefix, rateLimiter, ...guard, variantRouter);
+
+    // Cohort and retention analysis routes (Issue #623)
+    const cohortRouter = createCohortRoutes({
+      cohortService,
+      campaignRepo: campaignRepository,
+    });
+    app.use(prefix, rateLimiter, ...guard, cohortRouter);
+
+    // Web Push subscription routes (Issue #619)
+    const pushRouter = createPushRoutes({
+      repository: pushSubscriptionRepository,
+      service: webPushService,
+    });
+    app.use(prefix, rateLimiter, ...guard, pushRouter);
   }
 
   registerApiRoutes(API_V1_PREFIX);
   registerApiRoutes(LEGACY_API_PREFIX);
+
+  // Dynamic sitemap.xml for SEO — lists all public (non-hidden, active) campaign pages
+  app.get('/sitemap.xml', rateLimiter, (req, res) => {
+    const siteUrl =
+      (process.env.SITE_URL || '').replace(/\/+$/, '') || `${req.protocol}://${req.get('host')}`;
+
+    const staticPaths = ['/', '/explore', '/about'];
+    const campaigns = campaignRepository.list({ active: true });
+
+    const urlEntries = [
+      ...staticPaths.map(
+        (p) =>
+          `<url><loc>${siteUrl}${p}</loc><changefreq>daily</changefreq><priority>${p === '/' || p === '/explore' ? '1.0' : '0.7'}</priority></url>`,
+      ),
+      ...campaigns.map(
+        (c) =>
+          `<url><loc>${siteUrl}/campaign/${encodeURIComponent(c.id)}</loc><lastmod>${c.updatedAt ? new Date(c.updatedAt).toISOString().slice(0, 10) : new Date().toISOString().slice(0, 10)}</lastmod><changefreq>weekly</changefreq><priority>0.8</priority></url>`,
+      ),
+    ];
+
+    const xml = `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${urlEntries.join('\n')}\n</urlset>`;
+
+    res
+      .set('Content-Type', 'application/xml; charset=utf-8')
+      .set('Cache-Control', 'public, max-age=3600, stale-while-revalidate=86400')
+      .send(xml);
+  });
 
   // Central error handler — must be registered after all routes
   app.use(errorHandler);
@@ -1582,9 +1914,52 @@ export async function startServer(options = {}) {
   const app = await createApp(options);
   const port = options.port ?? process.env.PORT ?? DEFAULT_PORT;
 
-  return app.listen(port, () => {
+  const server = app.listen(port, () => {
     log.info({ port }, 'Trivela API running');
   });
+
+  // ── Graceful shutdown (issue #650) ─────────────────────────────────────────
+  // On SIGTERM / SIGINT:
+  //   1. Stop accepting new connections (server.close).
+  //   2. Allow in-flight HTTP requests to finish for up to SHUTDOWN_GRACE_MS.
+  //   3. Send "Connection: close / will-reconnect" hint to open SSE/WS streams.
+  //   4. Flush OTel spans.
+  //   5. Exit 0 once everything is drained (or force-exit after the grace window).
+  const SHUTDOWN_GRACE_MS = normalizePositiveInteger(process.env.SHUTDOWN_GRACE_MS, 15_000);
+
+  let shuttingDown = false;
+
+  async function gracefulShutdown(signal) {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    log.info({ signal, graceMs: SHUTDOWN_GRACE_MS }, 'graceful shutdown started');
+
+    // Force exit after the grace window so a stuck handler never blocks a deploy.
+    const forceTimer = setTimeout(() => {
+      log.error('graceful shutdown timed out — forcing exit');
+      process.exit(1);
+    }, SHUTDOWN_GRACE_MS);
+    if (typeof forceTimer.unref === 'function') forceTimer.unref();
+
+    // Stop accepting new connections; drain in-flight HTTP requests.
+    await new Promise((resolve) => server.close(resolve));
+
+    // Flush usage counters to DB before exiting.
+    stopUsageFlush();
+    await usageMeteringService.flushToDb().catch((err) => log.warn({ err }, 'usage flush warning'));
+
+    // Flush OTel exporter.
+    await shutdownTracing().catch((err) => log.warn({ err }, 'OTel shutdown warning'));
+
+    log.info('graceful shutdown complete');
+    clearTimeout(forceTimer);
+    process.exit(0);
+  }
+
+  process.once('SIGTERM', () => gracefulShutdown('SIGTERM'));
+  process.once('SIGINT', () => gracefulShutdown('SIGINT'));
+
+  return server;
 }
 
 const isExecutedDirectly =

@@ -52,9 +52,7 @@ export function createJobRunner({
             : String(error ?? 'unknown error'),
         attempts: job.attempt,
         enqueuedAt:
-          typeof job.enqueuedAt === 'number'
-            ? new Date(job.enqueuedAt).toISOString()
-            : null,
+          typeof job.enqueuedAt === 'number' ? new Date(job.enqueuedAt).toISOString() : null,
       });
     } catch (storeError) {
       logger.error?.(

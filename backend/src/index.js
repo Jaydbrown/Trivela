@@ -61,6 +61,8 @@ import { createAuditLogService } from './services/auditLogService.js';
 import { createWebPushService } from './services/webPushService.js';
 import { createOrganizationRoutes } from './routes/organizations.js';
 import { createUsageMeteringService } from './services/usageMeteringService.js';
+import { createFeatureFlagRoutes } from './routes/featureFlags.js';
+import { createFeatureFlagService } from './services/featureFlagService.js';
 import { createUsageMeteringMiddleware } from './middleware/usageMetering.js';
 import { requestTimeout } from './middleware/timeout.js';
 import { PoolSaturatedError } from './rpcPool.js';
@@ -1903,6 +1905,11 @@ export async function createApp(options = {}) {
     const organizationRouter = createOrganizationRoutes(dal);
     app.use(`${prefix}/organizations`, rateLimiter, requireApiKey, organizationRouter);
     app.use(prefix, rateLimiter, ...guard, pushRouter);
+
+    // Feature flag system routes (Issue #625)
+    const featureFlagService = createFeatureFlagService({ featureFlagRepository: dal.featureFlags });
+    const featureFlagRouter = createFeatureFlagRoutes({ featureFlagService });
+    app.use(`${prefix}/feature-flags`, rateLimiter, featureFlagRouter);
   }
 
   registerApiRoutes(API_V1_PREFIX);

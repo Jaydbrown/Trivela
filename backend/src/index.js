@@ -668,9 +668,18 @@ export async function createApp(options = {}) {
     }
   }
 
+  let isShuttingDown = false;
+
   app.get('/health', async (_req, res) => {
     const payload = await buildHealthPayload();
     res.json(payload);
+  });
+
+  app.get('/ready', (_req, res) => {
+    if (isShuttingDown) {
+      return res.status(503).json({ status: 'shutting_down', ready: false });
+    }
+    return res.json({ status: 'ok', ready: true });
   });
 
   const siteOrigin =
@@ -786,6 +795,7 @@ export async function createApp(options = {}) {
       prefix: API_V1_PREFIX,
       endpoints: {
         health: 'GET /health',
+        ready: 'GET /ready',
         healthRpc: 'GET /health/rpc',
         metrics: 'GET /metrics',
         info: `GET ${API_V1_PREFIX}`,
@@ -2116,6 +2126,11 @@ export async function createApp(options = {}) {
   // Central error handler — must be registered after all routes
   app.use(errorHandler);
 
+  app._close = () => {
+    isShuttingDown = true;
+    try { dal.db.close(); } catch (_) {}
+  };
+
   return app;
 }
 
@@ -2152,6 +2167,7 @@ export async function startServer(options = {}) {
   async function gracefulShutdown(signal) {
     if (shuttingDown) return;
     shuttingDown = true;
+    app._close?.();
     log.info({ signal, graceMs: SHUTDOWN_GRACE_MS }, 'graceful shutdown started');
 
     const forceTimer = setTimeout(() => {

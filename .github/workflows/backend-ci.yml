@@ -25,13 +25,8 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Run backend lint (if available)
-        run: |
-          if npm --workspace=backend run | rg -q "  lint"; then
-            npm run lint --workspace=backend
-          else
-            echo "No backend lint script found; skipping."
-          fi
+      - name: Run backend lint
+        run: npm run lint --workspace=backend
 
       - name: Run backend typecheck (if available)
         run: |

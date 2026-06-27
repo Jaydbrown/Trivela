@@ -70,7 +70,7 @@ async function request(url, options = {}) {
  *   q?: string,
  *   page?: number,
  *   limit?: number,
- *   sort?: 'name' | 'created_at' | 'updated_at' | 'reward_per_action' | 'id',
+ *   sort?: 'name' | 'created_at' | 'updated_at' | 'reward_per_action' | 'id' | 'urgency',
  *   order?: 'asc' | 'desc'
  * }} [params]
  */

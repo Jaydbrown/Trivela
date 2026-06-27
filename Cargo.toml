@@ -5,6 +5,8 @@ members = [
   "contracts/campaign",
   "contracts/badges",
   "contracts/integration",
+  "contracts/nullifiers",
+  "contracts/voting",
 ]
 
 [workspace.metadata]

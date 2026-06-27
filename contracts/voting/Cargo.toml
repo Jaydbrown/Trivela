@@ -1,24 +1,24 @@
 [package]
-name = "trivela-campaign-contract"
+name = "trivela-voting"
 version = "0.1.0"
 edition = "2021"
 publish = false
 rust-version = "1.75.0"
-description = "Trivela campaign configuration and eligibility on Soroban"
+description = "Commit-reveal voting module for Trivela campaigns"
 license = "Apache-2.0"
 
 [lib]
 crate-type = ["cdylib", "rlib"]
 doctest = false
 
+[features]
+testutils = ["soroban-sdk/testutils"]
+
 [dependencies]
 soroban-sdk = "25.1"
-trivela-nullifier-registry = { path = "../nullifiers" }
 
 [dev-dependencies]
 soroban-sdk = { version = "25.1", features = ["testutils"] }
-trivela-nullifier-registry = { path = "../nullifiers" }
-proptest = "1.4"
 
 [profile.release]
 opt-level = "z"

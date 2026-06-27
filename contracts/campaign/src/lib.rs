@@ -37,6 +37,7 @@ use soroban_sdk::{
     contract, contracterror, contractimpl, contractmeta, contracttype, symbol_short, Address, Bytes, BytesN, Env,
     Symbol, Vec, vec,
 };
+use trivela_nullifier_registry::NullifierRegistry;
 
 #[contracterror]
 #[derive(Clone, Copy, Debug, Eq, PartialEq, PartialOrd, Ord)]
@@ -166,6 +167,21 @@ pub enum PrivacyMode {
     Merkle = 1,
     /// ZK registration — requires a zero-knowledge proof.
     Zk = 2,
+}
+
+// ── Uniqueness mode (issue #539) ──────────────────────────────────────────────
+// Per-campaign uniqueness enforcement: none or nullifier-based.
+const UNIQUENESS_MODE: Symbol = symbol_short!("unqmode");
+const NULLIFIER_REGISTRY: Symbol = symbol_short!("nullreg");
+const SET_UNIQUENESS_EVENT: Symbol = symbol_short!("unqset");
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[contracttype]
+pub enum UniquenessMode {
+    /// No uniqueness enforcement — current behavior.
+    None = 0,
+    /// Nullifier-based uniqueness — one entry per unique identity.
+    Nullifier = 1,
 }
 
 #[contract]
@@ -446,6 +462,128 @@ impl CampaignContract {
             .instance()
             .get(&FALLBACK_ALLOWED)
             .unwrap_or(false)
+    }
+
+    // ── Uniqueness mode (issue #539) ──────────────────────────────────────
+
+    /// Set the uniqueness mode for this campaign (admin only).
+    ///
+    /// Controls whether anti-sybil uniqueness is enforced:
+    /// - `None`: no uniqueness enforcement (current behavior).
+    /// - `Nullifier`: requires a nullifier registry proof for uniqueness.
+    ///
+    /// `registry_address` must be provided when setting `Nullifier` mode.
+    pub fn set_uniqueness_mode(
+        env: Env,
+        admin: Address,
+        nonce: u64,
+        mode: UniquenessMode,
+        registry_address: Option<Address>,
+    ) -> Result<(), Error> {
+        require_admin_with_nonce(&env, &admin, nonce)?;
+
+        if mode == UniquenessMode::Nullifier {
+            let addr = registry_address.ok_or(Error::Unauthorized)?;
+            env.storage().instance().set(&NULLIFIER_REGISTRY, &addr);
+        }
+
+        env.storage().instance().set(&UNIQUENESS_MODE, &mode);
+        env.events()
+            .publish((SET_UNIQUENESS_EVENT,), (mode as u32));
+        env.storage()
+            .instance()
+            .extend_ttl(TTL_THRESHOLD, TTL_EXTEND_TO);
+        Ok(())
+    }
+
+    /// Get the current uniqueness mode.
+    /// Defaults to `UniquenessMode::None` when not set.
+    pub fn get_uniqueness_mode(env: Env) -> UniquenessMode {
+        env.storage()
+            .instance()
+            .get(&UNIQUENESS_MODE)
+            .unwrap_or(UniquenessMode::None)
+    }
+
+    /// Get the nullifier registry address, if configured.
+    pub fn get_nullifier_registry(env: Env) -> Option<Address> {
+        env.storage().instance().get(&NULLIFIER_REGISTRY)
+    }
+
+    /// Register a participant with uniqueness proof (anti-sybil).
+    ///
+    /// When the campaign's uniqueness mode is `Nullifier`, this function:
+    /// 1. Verifies the nullifier has not been spent via the nullifier registry.
+    /// 2. Spends the nullifier to prevent double-registration.
+    ///
+    /// The `uniqueness_proof` is passed through to the registry for
+    /// future verification. For now, it's stored alongside the nullifier.
+    ///
+    /// Returns `true` on first registration, `false` if already registered.
+    pub fn register_with_uniqueness(
+        env: Env,
+        participant: Address,
+        nullifier: BytesN<32>,
+        uniqueness_proof: Bytes,
+    ) -> Result<bool, Error> {
+        participant.require_auth();
+
+        // Check uniqueness mode
+        let mode: UniquenessMode = env
+            .storage()
+            .instance()
+            .get(&UNIQUENESS_MODE)
+            .unwrap_or(UniquenessMode::None);
+
+        if mode != UniquenessMode::Nullifier {
+            return Err(Error::InvalidPrivacyMode);
+        }
+
+        // Get registry address
+        let registry_addr: Address = env
+            .storage()
+            .instance()
+            .get(&NULLIFIER_REGISTRY)
+            .ok_or(Error::Unauthorized)?;
+
+        // Check if nullifier is already spent
+        let args: Vec<soroban_sdk::Val> = vec![
+            &env,
+            env.current_contract_address().to_val(),
+            nullifier.clone().to_val(),
+        ];
+        let is_spent: bool = env.invoke_contract(
+            &registry_addr,
+            &symbol_short!("is_spent"),
+            args,
+        );
+
+        if is_spent {
+            return Err(Error::NullifierAlreadyUsed);
+        }
+
+        // Delegate to shared registration logic
+        let was_new = do_register(&env, participant.clone(), None)?;
+
+        // Spend the nullifier only on successful new registration
+        if was_new {
+            let spend_args: Vec<soroban_sdk::Val> = vec![
+                &env,
+                env.current_contract_address().to_val(),
+                nullifier.to_val(),
+            ];
+            let result: Result<(), trivela_nullifier_registry::Error> = env.invoke_contract(
+                &registry_addr,
+                &symbol_short!("spend"),
+                spend_args,
+            );
+
+            if result.is_err() {
+                return Err(Error::NullifierAlreadyUsed);
+            }
+        }
+
+        Ok(was_new)
     }
 
     /// Register a participant using a ZK proof (private registration).

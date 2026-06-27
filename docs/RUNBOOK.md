@@ -126,3 +126,138 @@ If `npm run db:migrate` fails during deployment:
 2. Review the failing migration file in `backend/src/db/migrations/`.
 3. If using PostgreSQL, connect with `psql` and inspect the migration state table.
 4. Do **not** delete migration files — mark them as rolled back in the state table if needed.
+
+## Database Backup & Restore
+
+### RTO / RPO Targets
+
+| Metric | Target | Rationale |
+|--------|--------|-----------|
+| **RPO** (Recovery Point Objective) | ≤ 24 hours | Daily automated backups at 02:00 UTC |
+| **RTO** (Recovery Time Objective) | ≤ 30 minutes | pg_restore + smoke test suite |
+
+### Automated Backups
+
+Backups run daily via the `k8s/cronjob-db-backup.yaml` CronJob or can be triggered manually:
+
+```bash
+# Manual backup (PostgreSQL)
+DATABASE_URL="postgresql://trivela_user:password@localhost:5432/trivela_db" \
+STORAGE_BACKEND=local \
+./scripts/backup-db.sh
+
+# Manual backup to S3 with encryption
+DATABASE_URL="postgresql://..." \
+STORAGE_BACKEND=s3 \
+S3_BUCKET=trivela-backups \
+BACKUP_ENCRYPTION_KEY=./backup-key.pub \
+./scripts/backup-db.sh
+```
+
+Each backup produces:
+- A compressed `pg_dump` in custom format (`.dump.gz`)
+- A `manifest.json` with checksum, schema version, and indexer cursor
+- Optional age encryption (`.age` suffix)
+
+### Retention Policy
+
+| Retention | Default | Configurable via |
+|-----------|---------|-----------------|
+| Daily | 7 days | `BACKUP_RETENTION_DAILY` |
+| Weekly | 4 weeks | `BACKUP_RETENTION_WEEKLY` |
+| Monthly | 6 months | `BACKUP_RETENTION_MONTHLY` |
+
+Old backups are pruned automatically by the backup script.
+
+### Restore Procedure
+
+```bash
+# 1. Identify the latest backup
+ls -la backups/2025/06/27/
+
+# 2. Restore from backup
+DATABASE_URL="postgresql://trivela_user:password@localhost:5432/trivela_db" \
+BACKUP_DECRYPTION_KEY=./backup-key.txt \
+SMOKE_TEST_ENABLED=true \
+./scripts/restore-db.sh backups/2025/06/27/trivela-backup-20250627T020000Z.dump.gz.age
+
+# 3. For S3 backups
+DATABASE_URL="postgresql://..." \
+./scripts/restore-db.sh s3://trivela-backups/backups/2025/06/27/trivela-backup-20250627T020000Z.dump.gz
+```
+
+The restore script performs:
+1. Checksum verification (if `.sha256` file present)
+2. Decryption (if `BACKUP_DECRYPTION_KEY` provided)
+3. Decompression and `pg_restore --clean --if-exists`
+4. Indexer cursor inspection
+5. Smoke queries against `campaigns`, `audit_logs`, `api_keys`, `_schema_migrations`
+
+### Verify Backup Integrity
+
+```bash
+# Generate checksum for an existing backup
+sha256sum backup.dump.gz > backup.dump.gz.sha256
+
+# Verify checksum
+echo "$(cat backup.dump.gz.sha256)  backup.dump.gz" | sha256sum -c -
+```
+
+### Restore Drill (Staging)
+
+Run an automated restore drill in staging/CI:
+
+```bash
+# 1. Restore latest backup into a throwaway database
+createdb trivela_restore_drill
+DATABASE_URL="postgresql://trivela_user:password@localhost:5432/trivela_restore_drill" \
+./scripts/restore-db.sh <latest-backup-path>
+
+# 2. Run smoke test suite
+DATABASE_URL="postgresql://trivela_user:password@localhost:5432/trivela_restore_drill" \
+SMOKE_TEST_ENABLED=true \
+./scripts/restore-db.sh <latest-backup-path>  # Already runs smoke tests
+
+# 3. Drop the throwaway database
+dropdb trivela_restore_drill
+```
+
+### Emergency: Restore Without Backup Script
+
+If the restore script is unavailable, manual steps:
+
+```bash
+# Decompress
+gunzip -k trivela-backup.dump.gz
+
+# Restore
+pg_restore --clean --if-exists --no-owner \
+  --dbname "postgresql://trivela_user:password@localhost:5432/trivela_db" \
+  trivela-backup.dump
+
+# Verify schema
+psql "$DATABASE_URL" -c "SELECT version, description FROM _schema_migrations ORDER BY version DESC LIMIT 5;"
+
+# Verify data
+psql "$DATABASE_URL" -c "SELECT COUNT(*) FROM campaigns;"
+```
+
+### k8s Backup CronJob
+
+The backup CronJob runs in the `trivela` namespace:
+
+```bash
+# Check CronJob status
+kubectl get cronjob trivela-db-backup -n trivela
+
+# Trigger a manual backup job
+kubectl create job --from=cronjob/trivela-db-backup trivela-db-backup-manual-$(date +%s) -n trivela
+
+# Check job logs
+kubectl logs job/trivela-db-backup-manual-xxx -n trivela
+```
+
+Required secrets for the CronJob:
+- `trivela-secrets.DATABASE_URL` — PostgreSQL connection string
+- `trivela-secrets.S3_BACKUP_BUCKET` — S3 bucket (if using S3)
+- `trivela-secrets.BACKUP_ENCRYPTION_PUBKEY` — age public key (optional)

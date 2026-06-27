@@ -71,6 +71,10 @@ import { createDistributedLock, createInMemoryLock } from './jobs/distributedLoc
 import { createExportJob } from './jobs/exportJob.js';
 import { createSqliteJobQueueRepository } from './dal/sqliteJobQueueRepository.js';
 import { createDurableJobQueue } from './jobs/durableJobQueue.js';
+import { createStellarTomlRoute } from './routes/stellarToml.js';
+import { createSponsoredAccountRoutes } from './routes/sponsoredAccounts.js';
+import { createClaimableBalancesRoutes } from './routes/claimableBalances.js';
+import { createIndexReadRoutes } from './routes/indexRead.js';
 
 const DEFAULT_PORT = 3001;
 const DEFAULT_RATE_LIMIT_WINDOW_MS = 60_000;
@@ -2091,7 +2095,33 @@ export async function createApp(options = {}) {
     const featureFlagService = createFeatureFlagService({ featureFlagRepository: dal.featureFlags });
     const featureFlagRouter = createFeatureFlagRoutes({ featureFlagService });
     app.use(`${prefix}/feature-flags`, rateLimiter, featureFlagRouter);
+
+    // #560 — Public read API over indexed data (cursor-paginated, ETag cached)
+    const indexReadRouter = createIndexReadRoutes({ dal, campaignRepository });
+    app.use(`${prefix}/index`, rateLimiter, indexReadRouter);
+
+    // #556 — Sponsored account creation + CAP-33 reserve sponsorship
+    const sponsoredAccountRouter = createSponsoredAccountRoutes({
+      dal,
+      stellarConfig,
+      env: process.env,
+    });
+    app.use(`${prefix}/sponsored-accounts`, rateLimiter, ...guard, sponsoredAccountRouter);
+
+    // #548 — Claimable balances for unclaimed/expired rewards
+    const claimableBalancesRouter = createClaimableBalancesRoutes({
+      dal,
+      campaignRepository,
+      stellarConfig,
+      env: process.env,
+      logger: log,
+    });
+    app.use(prefix, rateLimiter, ...guard, claimableBalancesRouter);
   }
+
+  // #551 — SEP-1 stellar.toml (public, no auth, correct content-type + CORS)
+  const stellarTomlRouter = createStellarTomlRoute({ env: process.env });
+  app.use(stellarTomlRouter);
 
   registerApiRoutes(API_V1_PREFIX);
   registerApiRoutes(LEGACY_API_PREFIX);

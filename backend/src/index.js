@@ -951,16 +951,29 @@ export async function createApp(options = {}) {
       status = 'published';
     }
 
+    // Handle urgency sorting separately since it requires application-level logic
+    const isUrgencySort = sort === 'urgency';
+    const dbSort = isUrgencySort ? undefined : sort;
+    const dbOrder = isUrgencySort ? undefined : order;
+
     const items = campaignRepository.list({
       active: activeFilter,
       q,
-      sort,
-      order,
+      sort: dbSort,
+      order: dbOrder,
       category,
       tags,
       status,
     });
-    const payload = paginateItems(items, req.query);
+
+    // Apply urgency sorting if requested
+    let sortedItems = items;
+    if (isUrgencySort) {
+      const { sortByUrgency } = await import('./utils/urgency.js');
+      sortedItems = sortByUrgency(items);
+    }
+
+    const payload = paginateItems(sortedItems, req.query);
     shortCache.set(cacheKey, {
       expiresAt: Date.now() + shortCacheTtlMs,
       payload,

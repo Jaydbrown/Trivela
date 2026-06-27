@@ -1350,6 +1350,25 @@
   font-weight: 600;
 }
 
+.create-campaign-field-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1rem;
+}
+
+.create-campaign-file {
+  padding: 0.5rem;
+}
+
+.create-campaign-image-preview {
+  max-width: 100%;
+  max-height: 160px;
+  border-radius: 12px;
+  object-fit: cover;
+  margin-top: 0.5rem;
+  border: 1px solid var(--border);
+}
+
 /* ---------- responsive: small screens (issue #42) ---------- */
 
 @media (max-width: 540px) {
@@ -1430,6 +1449,10 @@
 
   .create-campaign-form .btn {
     width: 100%;
+  }
+
+  .create-campaign-field-row {
+    grid-template-columns: 1fr;
   }
 
   .admin-error {

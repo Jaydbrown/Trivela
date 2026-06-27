@@ -1576,3 +1576,9 @@ mod test;
 
 #[cfg(test)]
 mod fuzz_test;
+
+#[cfg(all(test, kani))]
+mod kani_harnesses;
+
+#[cfg(test)]
+mod negative_tests;

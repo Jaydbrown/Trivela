@@ -1,11 +1,12 @@
 import { lazy, Suspense, useEffect, useState } from 'react';
-import { Routes, Route, useLocation } from 'react-router-dom';
+import { Routes, Route, useLocation, useNavigate } from 'react-router-dom';
 import Landing from './Landing';
 import CampaignDetail from './CampaignDetail';
 import AdminCampaigns from './AdminCampaigns';
 import About from './About';
 import CampaignAnalytics from './CampaignAnalytics';
 import NotificationSettings from './NotificationSettings';
+import CreateCampaign from './CreateCampaign';
 import PageMeta from './components/PageMeta';
 import WalletModal from './components/WalletModal';
 import RequireAdmin from './components/RequireAdmin';
@@ -156,6 +157,7 @@ export default function App() {
   };
 
   const location = useLocation();
+  const navigate = useNavigate();
   const defaultPath = location.pathname || '/';
 
   return (
@@ -290,6 +292,22 @@ export default function App() {
                   isWalletBalanceLoading={isWalletBalanceLoading}
                   onConnectWallet={openWalletModal}
                   onDisconnectWallet={disconnectWallet}
+                />
+              </RequireAdmin>
+            }
+          />
+          <Route
+            path="/admin/campaigns/new"
+            element={
+              <RequireAdmin
+                walletAddress={walletAddress}
+                onConnectWallet={openWalletModal}
+                isWalletLoading={isWalletLoading}
+              >
+                <CreateCampaign
+                  standalone
+                  campaigns={[]}
+                  onCampaignCreated={(c) => navigate(`/campaign/${c.id}`)}
                 />
               </RequireAdmin>
             }

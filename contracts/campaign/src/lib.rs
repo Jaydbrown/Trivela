@@ -9,6 +9,32 @@
 //! - `window`: topics `(window,)`, data `(start: u64, end: u64)`
 //! - `maxcap`: topics `(maxcap,)`, data `max_cap: u64`
 //! - `merkle`: topics `(merkle,)`, data `root: BytesN<32>`
+//! - `pruned`: topics `(pruned, kind)`, data `count: u32`
+//! - `invonly`: topics `(invonly,)`, data `enabled: bool`
+//! - `invite`: topics `(invite,)`, data `invite_hash: BytesN<32>`
+//! - `invrevk`: topics `(invrevk,)`, data `invite_hash: BytesN<32>`
+//!
+//! ## Storage pruning
+//!
+//! Participant records and multisig nonces are not bumped indefinitely on
+//! Soroban; [`CampaignContract::prune_expired_participants`] and
+//! [`CampaignContract::prune_used_nonces`] let anyone reclaim storage for
+//! entries past their TTL, in capped batches. [`CampaignContract::storage_stats`]
+//! reports current usage for monitoring.
+//!
+//! ## Invite-only registration
+//!
+//! When invite-only mode is enabled via `set_invite_only`, `register` requires
+//! an `invite_code` whose `sha256` hash matches one issued via `issue_invite`
+//! and not yet redeemed. Each invite hash is single-use.
+//!
+//! ## Co-admin multisig
+//!
+//! `set_merkle_root` is a critical operation: once a threshold is configured
+//! via `set_multisig_threshold`, it requires at least that many valid
+//! co-admin signatures (registered via `add_co_admin`) over
+//! `(op, nonce, args_hash)`, verified with ed25519. The nonce is consumed on
+//! use regardless of how many signers participated.
 //!
 //! ## Merkle allowlist
 //!
@@ -49,6 +75,15 @@ pub enum Error {
     UnsupportedMigration = 105,
     InvalidAdminNonce = 106,
     InvalidWindow = 107,
+    InviteCodeRequired = 108,
+    InvalidInviteCode = 109,
+    InviteAlreadyUsed = 110,
+    InviteNotFound = 111,
+    InvalidThreshold = 112,
+    InsufficientSignatures = 113,
+    NonceReused = 114,
+    DuplicateSigner = 115,
+    UnknownSigner = 116,
 }
 
 contractmeta!(key = "Description", val = "Trivela campaign configuration");
@@ -69,6 +104,31 @@ const SET_ACTIVE_EVENT: Symbol = symbol_short!("active");
 const SET_WINDOW_EVENT: Symbol = symbol_short!("window");
 const SET_MAX_CAP_EVENT: Symbol = symbol_short!("maxcap");
 const SET_MERKLE_ROOT_EVENT: Symbol = symbol_short!("merkle");
+const PRUNED_EVENT: Symbol = symbol_short!("pruned");
+
+// ── pruning ──────────────────────────────────────────────────────────────────
+const PARTICIPANT_REGISTRY: Symbol = symbol_short!("preg");
+const PRUNE_CURSOR: Symbol = symbol_short!("pcursor");
+/// Participant records older than this many ledgers are eligible for pruning.
+const PARTICIPANT_TTL_LEDGERS: u32 = 1_036_800;
+const NONCE_REGISTRY: Symbol = symbol_short!("nreg");
+const NONCE_CURSOR: Symbol = symbol_short!("ncursor");
+const NONCE_USED: Symbol = symbol_short!("msnonce");
+/// Multisig nonces older than this many ledgers are eligible for pruning.
+const NONCE_TTL_LEDGERS: u32 = 10_000;
+
+// ── invite-only registration ────────────────────────────────────────────────
+const INVITE_ONLY: Symbol = symbol_short!("invonly");
+const INVITE_HASH: Symbol = symbol_short!("invhash");
+const INVITE_USED: Symbol = symbol_short!("invused");
+const SET_INVITE_ONLY_EVENT: Symbol = symbol_short!("invonly");
+const ISSUE_INVITE_EVENT: Symbol = symbol_short!("invite");
+const REVOKE_INVITE_EVENT: Symbol = symbol_short!("invrevk");
+
+// ── co-admin multisig ────────────────────────────────────────────────────────
+const CO_ADMINS: Symbol = symbol_short!("coadmin");
+const MULTISIG_THRESHOLD: Symbol = symbol_short!("msthresh");
+const OP_SET_MERKLE_ROOT: u32 = 1;
 
 #[contract]
 pub struct CampaignContract;
@@ -110,6 +170,65 @@ fn require_admin_with_nonce(env: &Env, admin: &Address, nonce: u64) -> Result<()
         return Err(Error::InvalidAdminNonce);
     }
     env.storage().instance().set(&ADMIN_NONCE, &(current + 1));
+    Ok(())
+}
+
+/// Build the signed payload for a multisig operation: `sha256(op || nonce || args_hash)`.
+/// `op` is a stable per-function discriminant used in place of the function
+/// name string (Symbol byte access is not available in `no_std`).
+fn multisig_message(env: &Env, op: u32, nonce: u64, args_hash: &BytesN<32>) -> Bytes {
+    let mut buf = [0u8; 44];
+    buf[0..4].copy_from_slice(&op.to_be_bytes());
+    buf[4..12].copy_from_slice(&nonce.to_be_bytes());
+    buf[12..44].copy_from_slice(&args_hash.to_array());
+    Bytes::from_slice(env, &buf)
+}
+
+/// Verify at least `required` distinct co-admin signatures over
+/// `(op, nonce, args_hash)`, then consume `nonce` for replay protection.
+/// The nonce is consumed regardless of how many signers submitted.
+fn verify_multisig(
+    env: &Env,
+    op: u32,
+    args_hash: BytesN<32>,
+    nonce: u64,
+    signatures: &Vec<(Address, BytesN<64>)>,
+) -> Result<(), Error> {
+    let required: u32 = env.storage().instance().get(&MULTISIG_THRESHOLD).unwrap_or(0);
+    if required == 0 {
+        return Ok(());
+    }
+
+    let nonce_key = (NONCE_USED, nonce);
+    if env.storage().instance().get::<_, u32>(&nonce_key).is_some() {
+        return Err(Error::NonceReused);
+    }
+
+    let co_admins: Vec<(Address, BytesN<32>)> =
+        env.storage().instance().get(&CO_ADMINS).unwrap_or(Vec::new(env));
+    let message = multisig_message(env, op, nonce, &args_hash);
+
+    let mut seen: Vec<Address> = Vec::new(env);
+    for (signer, sig) in signatures.iter() {
+        if seen.iter().any(|s| s == signer) {
+            return Err(Error::DuplicateSigner);
+        }
+        let pubkey = co_admins
+            .iter()
+            .find_map(|(addr, key)| if addr == signer { Some(key) } else { None })
+            .ok_or(Error::UnknownSigner)?;
+        env.crypto().ed25519_verify(&pubkey, &message, &sig);
+        seen.push_back(signer.clone());
+    }
+
+    if seen.len() < required {
+        return Err(Error::InsufficientSignatures);
+    }
+
+    env.storage().instance().set(&nonce_key, &env.ledger().sequence());
+    let mut registry: Vec<u64> = env.storage().instance().get(&NONCE_REGISTRY).unwrap_or(Vec::new(env));
+    registry.push_back(nonce);
+    env.storage().instance().set(&NONCE_REGISTRY, &registry);
     Ok(())
 }
 
@@ -222,18 +341,31 @@ impl CampaignContract {
         Ok(())
     }
 
-    /// Set the Merkle root for allowlist-gated registration (admin only).
+    /// Set the Merkle root for allowlist-gated registration.
     ///
     /// Once set, every `register` call must supply a valid `(leaf, proof)`.
     /// Remove the root by calling this again with a root of all zeros to
     /// revert to open registration.
+    ///
+    /// This is a critical operation: when a multisig threshold is configured
+    /// (see [`Self::set_multisig_threshold`]), `signatures` must contain at
+    /// least `required` valid co-admin signatures over
+    /// `(op, nonce, sha256(root))`; otherwise pass an empty `Vec` and the
+    /// legacy single-admin nonce check applies.
     pub fn set_merkle_root(
         env: Env,
         admin: Address,
         nonce: u64,
         root: BytesN<32>,
+        signatures: Vec<(Address, BytesN<64>)>,
     ) -> Result<(), Error> {
-        require_admin_with_nonce(&env, &admin, nonce)?;
+        let threshold: u32 = env.storage().instance().get(&MULTISIG_THRESHOLD).unwrap_or(0);
+        if threshold > 0 {
+            let args_hash = env.crypto().sha256(&Bytes::from_slice(&env, &root.to_array())).into();
+            verify_multisig(&env, OP_SET_MERKLE_ROOT, args_hash, nonce, &signatures)?;
+        } else {
+            require_admin_with_nonce(&env, &admin, nonce)?;
+        }
         env.storage().instance().set(&MERKLE_ROOT, &root);
         env.events().publish((SET_MERKLE_ROOT_EVENT,), root.clone());
         env.storage().instance().extend_ttl(50, 100);
@@ -255,12 +387,18 @@ impl CampaignContract {
     ///           `leaf` to the stored root.  Pass an empty `Vec` when no root
     ///           is configured.
     ///
+    /// `invite_code` – required when invite-only mode is enabled (see
+    ///           [`Self::set_invite_only`]); `sha256(invite_code)` must match
+    ///           a hash issued via [`Self::issue_invite`] that has not yet
+    ///           been redeemed. Pass `None` when invite-only mode is off.
+    ///
     /// Returns `true` on first registration, `false` if already registered.
     pub fn register(
         env: Env,
         participant: Address,
         leaf: BytesN<32>,
         proof: Vec<BytesN<32>>,
+        invite_code: Option<Bytes>,
     ) -> Result<bool, Error> {
         participant.require_auth();
 
@@ -288,12 +426,32 @@ impl CampaignContract {
             }
         }
 
+        let invite_only: bool = env.storage().instance().get(&INVITE_ONLY).unwrap_or(false);
+        if invite_only {
+            let code = invite_code.ok_or(Error::InviteCodeRequired)?;
+            let invite_hash: BytesN<32> = env.crypto().sha256(&code).into();
+            let hash_key = (INVITE_HASH, invite_hash.clone());
+            if !env
+                .storage()
+                .instance()
+                .get::<_, bool>(&hash_key)
+                .unwrap_or(false)
+            {
+                return Err(Error::InvalidInviteCode);
+            }
+            let used_key = (INVITE_USED, invite_hash);
+            if env.storage().instance().get::<_, bool>(&used_key).unwrap_or(false) {
+                return Err(Error::InviteAlreadyUsed);
+            }
+            env.storage().instance().set(&used_key, &true);
+        }
+
         let key = (PARTICIPANT, participant.clone());
         if env
             .storage()
             .instance()
-            .get::<_, bool>(&key)
-            .unwrap_or(false)
+            .get::<_, u32>(&key)
+            .is_some()
         {
             return Ok(false);
         }
@@ -310,7 +468,15 @@ impl CampaignContract {
             }
         }
 
-        env.storage().instance().set(&key, &true);
+        env.storage().instance().set(&key, &env.ledger().sequence());
+
+        let mut registry: Vec<Address> = env
+            .storage()
+            .instance()
+            .get(&PARTICIPANT_REGISTRY)
+            .unwrap_or(Vec::new(&env));
+        registry.push_back(participant.clone());
+        env.storage().instance().set(&PARTICIPANT_REGISTRY, &registry);
 
         let count: u64 = env
             .storage()
@@ -367,8 +533,8 @@ impl CampaignContract {
     pub fn is_participant(env: Env, participant: Address) -> bool {
         env.storage()
             .instance()
-            .get(&(PARTICIPANT, participant))
-            .unwrap_or(false)
+            .get::<_, u32>(&(PARTICIPANT, participant))
+            .is_some()
     }
 
     /// Check if campaign is active.
@@ -396,11 +562,258 @@ impl CampaignContract {
     pub fn admin_nonce(env: Env) -> u64 {
         env.storage().instance().get(&ADMIN_NONCE).unwrap_or(0)
     }
+
+    // ── pruning (#451) ───────────────────────────────────────────────────
+
+    /// Remove participant records whose TTL has passed, up to `max_entries`
+    /// per call. Callable by anyone since it only deletes expired/stale
+    /// data. Returns the number of entries pruned.
+    pub fn prune_expired_participants(env: Env, max_entries: u32) -> u32 {
+        let registry: Vec<Address> = env
+            .storage()
+            .instance()
+            .get(&PARTICIPANT_REGISTRY)
+            .unwrap_or(Vec::new(&env));
+        let len = registry.len();
+        if len == 0 || max_entries == 0 {
+            return 0;
+        }
+
+        let now = env.ledger().sequence();
+        let mut cursor: u32 = env.storage().instance().get(&PRUNE_CURSOR).unwrap_or(0);
+        if cursor >= len {
+            cursor = 0;
+        }
+
+        let mut pruned = 0u32;
+        let mut checked = 0u32;
+        let mut idx = cursor;
+        while checked < len && pruned < max_entries {
+            let addr = registry.get(idx).unwrap();
+            let key = (PARTICIPANT, addr.clone());
+            if let Some(registered_at) = env.storage().instance().get::<_, u32>(&key) {
+                if now.saturating_sub(registered_at) > PARTICIPANT_TTL_LEDGERS {
+                    env.storage().instance().remove(&key);
+                    let count: u64 = env.storage().instance().get(&PARTICIPANT_COUNT).unwrap_or(0);
+                    if count > 0 {
+                        env.storage().instance().set(&PARTICIPANT_COUNT, &(count - 1));
+                    }
+                    pruned += 1;
+                }
+            }
+            idx = (idx + 1) % len;
+            checked += 1;
+        }
+        env.storage().instance().set(&PRUNE_CURSOR, &idx);
+
+        if pruned > 0 {
+            env.events().publish((PRUNED_EVENT, symbol_short!("partic")), pruned);
+        }
+        env.storage().instance().extend_ttl(50, 100);
+        pruned
+    }
+
+    /// Remove multisig nonce records older than [`NONCE_TTL_LEDGERS`], up to
+    /// `max_entries` per call. Callable by anyone since it only deletes
+    /// stale data. Returns the number of entries pruned.
+    pub fn prune_used_nonces(env: Env, max_entries: u32) -> u32 {
+        let registry: Vec<u64> = env
+            .storage()
+            .instance()
+            .get(&NONCE_REGISTRY)
+            .unwrap_or(Vec::new(&env));
+        let len = registry.len();
+        if len == 0 || max_entries == 0 {
+            return 0;
+        }
+
+        let now = env.ledger().sequence();
+        let mut cursor: u32 = env.storage().instance().get(&NONCE_CURSOR).unwrap_or(0);
+        if cursor >= len {
+            cursor = 0;
+        }
+
+        let mut pruned = 0u32;
+        let mut checked = 0u32;
+        let mut idx = cursor;
+        while checked < len && pruned < max_entries {
+            let nonce = registry.get(idx).unwrap();
+            let key = (NONCE_USED, nonce);
+            if let Some(used_at) = env.storage().instance().get::<_, u32>(&key) {
+                if now.saturating_sub(used_at) > NONCE_TTL_LEDGERS {
+                    env.storage().instance().remove(&key);
+                    pruned += 1;
+                }
+            }
+            idx = (idx + 1) % len;
+            checked += 1;
+        }
+        env.storage().instance().set(&NONCE_CURSOR, &idx);
+
+        if pruned > 0 {
+            env.events().publish((PRUNED_EVENT, symbol_short!("nonce")), pruned);
+        }
+        env.storage().instance().extend_ttl(50, 100);
+        pruned
+    }
+
+    /// Storage stats for monitoring: `(participant_count, nonce_count, expired_estimate)`.
+    /// `expired_estimate` counts currently-expired participant records.
+    pub fn storage_stats(env: Env) -> (u64, u64, u64) {
+        let participant_count: u64 = env.storage().instance().get(&PARTICIPANT_COUNT).unwrap_or(0);
+        let nonce_registry: Vec<u64> = env
+            .storage()
+            .instance()
+            .get(&NONCE_REGISTRY)
+            .unwrap_or(Vec::new(&env));
+        let nonce_count = nonce_registry.len() as u64;
+
+        let now = env.ledger().sequence();
+        let registry: Vec<Address> = env
+            .storage()
+            .instance()
+            .get(&PARTICIPANT_REGISTRY)
+            .unwrap_or(Vec::new(&env));
+        let mut expired = 0u64;
+        for addr in registry.iter() {
+            if let Some(registered_at) = env.storage().instance().get::<_, u32>(&(PARTICIPANT, addr)) {
+                if now.saturating_sub(registered_at) > PARTICIPANT_TTL_LEDGERS {
+                    expired += 1;
+                }
+            }
+        }
+        (participant_count, nonce_count, expired)
+    }
+
+    // ── invite-only registration (#452) ─────────────────────────────────
+
+    /// Toggle invite-only registration mode (admin only).
+    pub fn set_invite_only(env: Env, admin: Address, nonce: u64, enabled: bool) -> Result<(), Error> {
+        require_admin_with_nonce(&env, &admin, nonce)?;
+        env.storage().instance().set(&INVITE_ONLY, &enabled);
+        env.events().publish((SET_INVITE_ONLY_EVENT,), enabled);
+        env.storage().instance().extend_ttl(50, 100);
+        Ok(())
+    }
+
+    /// Issue an invite by storing its hash (admin only). The hash should be
+    /// `sha256(invite_code)`, computed off-chain; the raw code is never
+    /// stored on-chain.
+    pub fn issue_invite(
+        env: Env,
+        admin: Address,
+        nonce: u64,
+        invite_hash: BytesN<32>,
+    ) -> Result<(), Error> {
+        require_admin_with_nonce(&env, &admin, nonce)?;
+        env.storage().instance().set(&(INVITE_HASH, invite_hash.clone()), &true);
+        env.events().publish((ISSUE_INVITE_EVENT,), invite_hash);
+        env.storage().instance().extend_ttl(50, 100);
+        Ok(())
+    }
+
+    /// Revoke a previously issued invite (admin only).
+    pub fn revoke_invite(
+        env: Env,
+        admin: Address,
+        nonce: u64,
+        invite_hash: BytesN<32>,
+    ) -> Result<(), Error> {
+        require_admin_with_nonce(&env, &admin, nonce)?;
+        let key = (INVITE_HASH, invite_hash.clone());
+        if !env.storage().instance().get::<_, bool>(&key).unwrap_or(false) {
+            return Err(Error::InviteNotFound);
+        }
+        env.storage().instance().remove(&key);
+        env.storage().instance().remove(&(INVITE_USED, invite_hash.clone()));
+        env.events().publish((REVOKE_INVITE_EVENT,), invite_hash);
+        env.storage().instance().extend_ttl(50, 100);
+        Ok(())
+    }
+
+    /// Returns whether invite-only registration mode is enabled.
+    pub fn is_invite_only(env: Env) -> bool {
+        env.storage().instance().get(&INVITE_ONLY).unwrap_or(false)
+    }
+
+    /// Returns whether the given invite hash has already been redeemed.
+    pub fn invite_used(env: Env, invite_hash: BytesN<32>) -> bool {
+        env.storage()
+            .instance()
+            .get(&(INVITE_USED, invite_hash))
+            .unwrap_or(false)
+    }
+
+    // ── co-admin multisig (#454) ─────────────────────────────────────────
+
+    /// Register a co-admin's ed25519 public key for multisig verification
+    /// (admin only). Overwrites the key if `co_admin` is already registered.
+    pub fn add_co_admin(
+        env: Env,
+        admin: Address,
+        nonce: u64,
+        co_admin: Address,
+        pubkey: BytesN<32>,
+    ) -> Result<(), Error> {
+        require_admin_with_nonce(&env, &admin, nonce)?;
+        let mut co_admins: Vec<(Address, BytesN<32>)> =
+            env.storage().instance().get(&CO_ADMINS).unwrap_or(Vec::new(&env));
+        let mut found = false;
+        for i in 0..co_admins.len() {
+            let (addr, _) = co_admins.get(i).unwrap();
+            if addr == co_admin {
+                co_admins.set(i, (co_admin.clone(), pubkey.clone()));
+                found = true;
+                break;
+            }
+        }
+        if !found {
+            co_admins.push_back((co_admin, pubkey));
+        }
+        env.storage().instance().set(&CO_ADMINS, &co_admins);
+        env.storage().instance().extend_ttl(50, 100);
+        Ok(())
+    }
+
+    /// Remove a co-admin from the multisig signer set (admin only).
+    pub fn remove_co_admin(env: Env, admin: Address, nonce: u64, co_admin: Address) -> Result<(), Error> {
+        require_admin_with_nonce(&env, &admin, nonce)?;
+        let co_admins: Vec<(Address, BytesN<32>)> =
+            env.storage().instance().get(&CO_ADMINS).unwrap_or(Vec::new(&env));
+        let mut remaining = Vec::new(&env);
+        for (addr, pubkey) in co_admins.iter() {
+            if addr != co_admin {
+                remaining.push_back((addr, pubkey));
+            }
+        }
+        env.storage().instance().set(&CO_ADMINS, &remaining);
+        env.storage().instance().extend_ttl(50, 100);
+        Ok(())
+    }
+
+    /// Set the M-of-N multisig threshold for critical operations (admin only).
+    /// `required = 0` disables multisig (legacy single-admin auth applies).
+    pub fn set_multisig_threshold(env: Env, admin: Address, nonce: u64, required: u32) -> Result<(), Error> {
+        require_admin_with_nonce(&env, &admin, nonce)?;
+        let co_admins: Vec<(Address, BytesN<32>)> =
+            env.storage().instance().get(&CO_ADMINS).unwrap_or(Vec::new(&env));
+        if required > co_admins.len() {
+            return Err(Error::InvalidThreshold);
+        }
+        env.storage().instance().set(&MULTISIG_THRESHOLD, &required);
+        env.storage().instance().extend_ttl(50, 100);
+        Ok(())
+    }
+
+    /// Returns the configured M-of-N multisig threshold (0 = disabled).
+    pub fn multisig_threshold(env: Env) -> u32 {
+        env.storage().instance().get(&MULTISIG_THRESHOLD).unwrap_or(0)
+    }
 }
 
 fn do_deregister(env: &Env, participant: Address) -> bool {
     let key = (PARTICIPANT, participant.clone());
-    if !env.storage().instance().get::<_, bool>(&key).unwrap_or(false) {
+    if env.storage().instance().get::<_, u32>(&key).is_none() {
         return false;
     }
     env.storage().instance().remove(&key);

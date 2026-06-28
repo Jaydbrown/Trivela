@@ -9,23 +9,53 @@
     [],
     [
       [
-        "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M",
+        "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4",
         {
           "function": {
             "contract_fn": {
               "contract_address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
-              "function_name": "register",
+              "function_name": "set_tiers",
               "args": [
                 {
-                  "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M"
+                  "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
                 },
                 {
-                  "bytes": "0000000000000000000000000000000000000000000000000000000000000000"
+                  "u64": "1"
                 },
                 {
-                  "vec": []
-                },
-                "void"
+                  "vec": [
+                    {
+                      "vec": [
+                        {
+                          "u64": "10"
+                        },
+                        {
+                          "u64": "100"
+                        }
+                      ]
+                    },
+                    {
+                      "vec": [
+                        {
+                          "u64": "0"
+                        },
+                        {
+                          "u64": "10"
+                        }
+                      ]
+                    },
+                    {
+                      "vec": [
+                        {
+                          "u64": "20"
+                        },
+                        {
+                          "u64": "50"
+                        }
+                      ]
+                    }
+                  ]
+                }
               ]
             }
           },
@@ -33,6 +63,12 @@
         }
       ]
     ],
+    [],
+    [],
+    [],
+    [],
+    [],
+    [],
     []
   ],
   "ledger": {
@@ -62,14 +98,6 @@
                   "storage": [
                     {
                       "key": {
-                        "symbol": "active"
-                      },
-                      "val": {
-                        "bool": true
-                      }
-                    },
-                    {
-                      "key": {
                         "symbol": "admin"
                       },
                       "val": {
@@ -78,7 +106,7 @@
                     },
                     {
                       "key": {
-                        "symbol": "anonce"
+                        "symbol": "claimed"
                       },
                       "val": {
                         "u64": "0"
@@ -86,30 +114,33 @@
                     },
                     {
                       "key": {
-                        "symbol": "count"
-                      },
-                      "val": {
-                        "u64": "1"
-                      }
-                    },
-                    {
-                      "key": {
-                        "symbol": "end"
-                      },
-                      "val": {
-                        "u64": "18446744073709551615"
-                      }
-                    },
-                    {
-                      "key": {
-                        "symbol": "preg"
+                        "symbol": "metadata"
                       },
                       "val": {
                         "vec": [
                           {
-                            "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M"
+                            "symbol": "Trivela"
+                          },
+                          {
+                            "symbol": "TVL"
                           }
                         ]
+                      }
+                    },
+                    {
+                      "key": {
+                        "symbol": "mxcredit"
+                      },
+                      "val": {
+                        "u64": "0"
+                      }
+                    },
+                    {
+                      "key": {
+                        "symbol": "paused"
+                      },
+                      "val": {
+                        "bool": false
                       }
                     },
                     {
@@ -122,25 +153,48 @@
                     },
                     {
                       "key": {
-                        "symbol": "start"
-                      },
-                      "val": {
-                        "u64": "0"
-                      }
-                    },
-                    {
-                      "key": {
                         "vec": [
                           {
-                            "symbol": "partic"
+                            "symbol": "tiers"
                           },
                           {
-                            "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M"
+                            "u64": "1"
                           }
                         ]
                       },
                       "val": {
-                        "u32": 0
+                        "vec": [
+                          {
+                            "vec": [
+                              {
+                                "u64": "10"
+                              },
+                              {
+                                "u64": "100"
+                              }
+                            ]
+                          },
+                          {
+                            "vec": [
+                              {
+                                "u64": "20"
+                              },
+                              {
+                                "u64": "50"
+                              }
+                            ]
+                          },
+                          {
+                            "vec": [
+                              {
+                                "u64": "0"
+                              },
+                              {
+                                "u64": "10"
+                              }
+                            ]
+                          }
+                        ]
                       }
                     }
                   ]
@@ -158,7 +212,7 @@
           "data": {
             "contract_data": {
               "ext": "v0",
-              "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M",
+              "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4",
               "key": {
                 "ledger_key_nonce": {
                   "nonce": "801925984706572462"

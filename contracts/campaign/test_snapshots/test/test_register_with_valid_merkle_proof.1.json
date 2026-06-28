@@ -24,6 +24,9 @@
                 },
                 {
                   "bytes": "e2d80f78d79027556d6619a1400605abbdca6bb6eb24e0831e33ecd5466fa5f6"
+                },
+                {
+                  "vec": []
                 }
               ]
             }
@@ -54,7 +57,8 @@
                       "bytes": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
                     }
                   ]
-                }
+                },
+                "void"
               ]
             }
           },
@@ -83,7 +87,8 @@
                       "bytes": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
                     }
                   ]
-                }
+                },
+                "void"
               ]
             }
           },
@@ -169,6 +174,21 @@
                     },
                     {
                       "key": {
+                        "symbol": "preg"
+                      },
+                      "val": {
+                        "vec": [
+                          {
+                            "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M"
+                          },
+                          {
+                            "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAITA4"
+                          }
+                        ]
+                      }
+                    },
+                    {
+                      "key": {
                         "symbol": "schema_v"
                       },
                       "val": {
@@ -195,7 +215,7 @@
                         ]
                       },
                       "val": {
-                        "bool": true
+                        "u32": 0
                       }
                     },
                     {
@@ -210,7 +230,7 @@
                         ]
                       },
                       "val": {
-                        "bool": true
+                        "u32": 0
                       }
                     }
                   ]

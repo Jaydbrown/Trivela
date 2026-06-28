@@ -26,7 +26,8 @@
                 },
                 {
                   "vec": []
-                }
+                },
+                "void"
               ]
             }
           },
@@ -51,7 +52,8 @@
                 },
                 {
                   "vec": []
-                }
+                },
+                "void"
               ]
             }
           },
@@ -273,6 +275,21 @@
                     },
                     {
                       "key": {
+                        "symbol": "preg"
+                      },
+                      "val": {
+                        "vec": [
+                          {
+                            "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAITA4"
+                          },
+                          {
+                            "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAK3IM"
+                          }
+                        ]
+                      }
+                    },
+                    {
+                      "key": {
                         "symbol": "schema_v"
                       },
                       "val": {
@@ -299,7 +316,7 @@
                         ]
                       },
                       "val": {
-                        "bool": true
+                        "u32": 0
                       }
                     },
                     {
@@ -314,7 +331,7 @@
                         ]
                       },
                       "val": {
-                        "bool": true
+                        "u32": 0
                       }
                     }
                   ]

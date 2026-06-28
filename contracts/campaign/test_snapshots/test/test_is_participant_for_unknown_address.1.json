@@ -26,7 +26,8 @@
                 },
                 {
                   "vec": []
-                }
+                },
+                "void"
               ]
             }
           },
@@ -105,6 +106,18 @@
                     },
                     {
                       "key": {
+                        "symbol": "preg"
+                      },
+                      "val": {
+                        "vec": [
+                          {
+                            "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAK3IM"
+                          }
+                        ]
+                      }
+                    },
+                    {
+                      "key": {
                         "symbol": "schema_v"
                       },
                       "val": {
@@ -131,7 +144,7 @@
                         ]
                       },
                       "val": {
-                        "bool": true
+                        "u32": 0
                       }
                     }
                   ]

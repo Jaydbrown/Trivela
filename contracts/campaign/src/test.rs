@@ -1,8 +1,31 @@
 //! Tests for the Trivela campaign contract.
 
 use super::*;
+use ed25519_dalek::{Signer, SigningKey};
 use soroban_sdk::testutils::{Address as _, Events as _, Ledger};
 use soroban_sdk::{vec, Address, Bytes, BytesN, IntoVal, Vec};
+
+/// Generate a deterministic ed25519 keypair for multisig tests, keyed by a
+/// single seed byte so each co-admin gets a distinct key.
+fn gen_keypair(seed: u8) -> SigningKey {
+    let bytes = [seed; 32];
+    SigningKey::from_bytes(&bytes)
+}
+
+fn sign_op(
+    env: &Env,
+    signing_key: &SigningKey,
+    op: u32,
+    nonce: u64,
+    args_hash: &BytesN<32>,
+) -> BytesN<64> {
+    let mut buf = [0u8; 44];
+    buf[0..4].copy_from_slice(&op.to_be_bytes());
+    buf[4..12].copy_from_slice(&nonce.to_be_bytes());
+    buf[12..44].copy_from_slice(&args_hash.to_array());
+    let sig = signing_key.sign(&buf);
+    BytesN::from_array(env, &sig.to_bytes())
+}
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -67,7 +90,7 @@ fn test_register_participant() {
     client.initialize(&admin);
     env.mock_all_auths();
     let (leaf, proof) = no_proof_args(&env);
-    let registered = client.register(&participant, &leaf, &proof);
+    let registered = client.register(&participant, &leaf, &proof, &None);
     assert!(registered);
     assert!(client.is_participant(&participant));
 }
@@ -87,7 +110,7 @@ fn test_time_window_validation() {
     // Too early — exact error and no participant recorded.
     env.ledger().with_mut(|li| li.timestamp = 50);
     assert_eq!(
-        client.try_register(&participant, &leaf, &proof),
+        client.try_register(&participant, &leaf, &proof, &None),
         Err(Ok(Error::OutsideTimeWindow))
     );
     assert!(!client.is_participant(&participant));
@@ -95,14 +118,14 @@ fn test_time_window_validation() {
 
     // Within window — succeeds.
     env.ledger().with_mut(|li| li.timestamp = 150);
-    assert!(client.register(&participant, &leaf, &proof));
+    assert!(client.register(&participant, &leaf, &proof, &None));
     assert_eq!(client.get_participant_count(), 1);
 
     // Too late — exact error and count unchanged.
     let p2 = Address::generate(&env);
     env.ledger().with_mut(|li| li.timestamp = 250);
     assert_eq!(
-        client.try_register(&p2, &leaf, &proof),
+        client.try_register(&p2, &leaf, &proof, &None),
         Err(Ok(Error::OutsideTimeWindow))
     );
     assert!(!client.is_participant(&p2));
@@ -118,8 +141,8 @@ fn test_register_participant_twice_returns_false() {
 
     env.mock_all_auths();
     let (leaf, proof) = no_proof_args(&env);
-    assert!(client.register(&participant, &leaf, &proof));
-    assert!(!client.register(&participant, &leaf, &proof));
+    assert!(client.register(&participant, &leaf, &proof, &None));
+    assert!(!client.register(&participant, &leaf, &proof, &None));
 }
 
 #[test]
@@ -158,7 +181,7 @@ fn test_register_when_inactive() {
 
     let (leaf, proof) = no_proof_args(&env);
     assert_eq!(
-        client.try_register(&participant, &leaf, &proof),
+        client.try_register(&participant, &leaf, &proof, &None),
         Err(Ok(Error::CampaignInactive))
     );
     // No participant was recorded and counter did not move.
@@ -167,7 +190,7 @@ fn test_register_when_inactive() {
 
     // Re-activating allows the same participant to register normally.
     client.set_active(&admin, &1, &true);
-    assert!(client.register(&participant, &leaf, &proof));
+    assert!(client.register(&participant, &leaf, &proof, &None));
     assert!(client.is_participant(&participant));
     assert_eq!(client.get_participant_count(), 1);
 }
@@ -188,7 +211,7 @@ fn test_is_participant_for_unknown_address() {
     let registered = Address::generate(&env);
     env.mock_all_auths();
     let (leaf, proof) = no_proof_args(&env);
-    assert!(client.register(&registered, &leaf, &proof));
+    assert!(client.register(&registered, &leaf, &proof, &None));
 
     assert!(client.is_participant(&registered));
     assert!(!client.is_participant(&unknown_a));
@@ -207,8 +230,8 @@ fn test_capacity_reached() {
     let p1 = Address::generate(&env);
     let p2 = Address::generate(&env);
     let (leaf, proof) = no_proof_args(&env);
-    assert!(client.register(&p1, &leaf, &proof));
-    let result = client.try_register(&p2, &leaf, &proof);
+    assert!(client.register(&p1, &leaf, &proof, &None));
+    let result = client.try_register(&p2, &leaf, &proof, &None);
     assert_eq!(result, Err(Ok(Error::CapReached)));
 }
 
@@ -231,7 +254,7 @@ fn test_set_merkle_root_only_by_admin() {
 
     env.mock_all_auths();
     let dummy: BytesN<32> = BytesN::from_array(&env, &[1u8; 32]);
-    let result = client.try_set_merkle_root(&other, &0, &dummy);
+    let result = client.try_set_merkle_root(&other, &0, &dummy, &Vec::new(&env));
     assert_eq!(result, Err(Ok(Error::Unauthorized)));
 }
 
@@ -249,12 +272,12 @@ fn test_register_with_valid_merkle_proof() {
     let (root, proof1, proof2) = build_two_leaf_tree(&env, leaf1.clone(), leaf2.clone());
 
     env.mock_all_auths();
-    client.set_merkle_root(&admin, &0, &root);
+    client.set_merkle_root(&admin, &0, &root, &Vec::new(&env));
     assert_eq!(client.get_merkle_root(), Some(root));
 
     // Both allowlisted participants can register with their correct leaf + proof.
-    assert!(client.register(&p1, &leaf1, &proof1));
-    assert!(client.register(&p2, &leaf2, &proof2));
+    assert!(client.register(&p1, &leaf1, &proof1, &None));
+    assert!(client.register(&p2, &leaf2, &proof2, &None));
     assert!(client.is_participant(&p1));
     assert!(client.is_participant(&p2));
 }
@@ -271,12 +294,12 @@ fn test_register_rejected_with_invalid_proof() {
     let (root, _proof1, _proof2) = build_two_leaf_tree(&env, leaf1.clone(), leaf2.clone());
 
     env.mock_all_auths();
-    client.set_merkle_root(&admin, &0, &root);
+    client.set_merkle_root(&admin, &0, &root, &Vec::new(&env));
 
     // p2 supplies leaf2 but with a totally wrong proof sibling.
     let wrong_sibling: BytesN<32> = BytesN::from_array(&env, &[0xFFu8; 32]);
     let bad_proof = vec![&env, wrong_sibling];
-    let result = client.try_register(&p2, &leaf2, &bad_proof);
+    let result = client.try_register(&p2, &leaf2, &bad_proof, &None);
     assert_eq!(result, Err(Ok(Error::NotInAllowlist)));
 }
 
@@ -292,11 +315,11 @@ fn test_register_rejected_with_leaf_not_in_tree() {
     let (root, _proof1, proof2) = build_two_leaf_tree(&env, leaf1.clone(), leaf2.clone());
 
     env.mock_all_auths();
-    client.set_merkle_root(&admin, &0, &root);
+    client.set_merkle_root(&admin, &0, &root, &Vec::new(&env));
 
     // p3 supplies a leaf that is not in the tree at all.
     let unknown_leaf: BytesN<32> = BytesN::from_array(&env, &[0xCCu8; 32]);
-    let result = client.try_register(&p3, &unknown_leaf, &proof2);
+    let result = client.try_register(&p3, &unknown_leaf, &proof2, &None);
     assert_eq!(result, Err(Ok(Error::NotInAllowlist)));
 }
 
@@ -312,10 +335,10 @@ fn test_register_rejected_with_empty_proof_when_root_set() {
     let (root, _proof1, _proof2) = build_two_leaf_tree(&env, leaf1.clone(), leaf2.clone());
 
     env.mock_all_auths();
-    client.set_merkle_root(&admin, &0, &root);
+    client.set_merkle_root(&admin, &0, &root, &Vec::new(&env));
 
     // Empty proof should fail when root is set – a leaf alone does not equal the root.
-    let result = client.try_register(&p1, &leaf1, &Vec::new(&env));
+    let result = client.try_register(&p1, &leaf1, &Vec::new(&env), &None);
     assert_eq!(result, Err(Ok(Error::NotInAllowlist)));
 }
 
@@ -329,7 +352,7 @@ fn test_open_registration_when_no_root() {
     // No root set – any leaf/proof is accepted.
     env.mock_all_auths();
     let (leaf, proof) = no_proof_args(&env);
-    assert!(client.register(&participant, &leaf, &proof));
+    assert!(client.register(&participant, &leaf, &proof, &None));
 }
 
 #[test]
@@ -362,9 +385,9 @@ fn test_participant_count_increments_on_new_register_only() {
 
     let (leaf, proof) = no_proof_args(&env);
     assert_eq!(client.get_participant_count(), 0);
-    assert!(client.register(&p1, &leaf, &proof));
+    assert!(client.register(&p1, &leaf, &proof, &None));
     assert_eq!(client.get_participant_count(), 1);
-    assert!(!client.register(&p1, &leaf, &proof));
+    assert!(!client.register(&p1, &leaf, &proof, &None));
     assert_eq!(client.get_participant_count(), 1);
 }
 
@@ -433,7 +456,7 @@ fn test_set_window_allows_equal_start_and_end() {
     let (leaf, proof) = no_proof_args(&env);
     env.ledger().with_mut(|li| li.timestamp = 500);
     assert!(client.is_within_window());
-    assert!(client.register(&participant, &leaf, &proof));
+    assert!(client.register(&participant, &leaf, &proof, &None));
 }
 
 #[test]
@@ -450,20 +473,20 @@ fn test_register_at_window_boundaries() {
     let p_start = Address::generate(&env);
     env.ledger().with_mut(|li| li.timestamp = 100);
     assert!(client.is_within_window());
-    assert!(client.register(&p_start, &leaf, &proof));
+    assert!(client.register(&p_start, &leaf, &proof, &None));
 
     // timestamp == end: inclusive upper bound.
     let p_end = Address::generate(&env);
     env.ledger().with_mut(|li| li.timestamp = 200);
     assert!(client.is_within_window());
-    assert!(client.register(&p_end, &leaf, &proof));
+    assert!(client.register(&p_end, &leaf, &proof, &None));
 
     // One past end: rejected.
     let p_after = Address::generate(&env);
     env.ledger().with_mut(|li| li.timestamp = 201);
     assert!(!client.is_within_window());
     assert_eq!(
-        client.try_register(&p_after, &leaf, &proof),
+        client.try_register(&p_after, &leaf, &proof, &None),
         Err(Ok(Error::OutsideTimeWindow))
     );
 }
@@ -541,7 +564,7 @@ fn test_register_unauthorized_other_address_does_not_persist() {
 
     env.mock_all_auths();
     let (leaf, proof) = no_proof_args(&env);
-    assert!(client.register(&participant, &leaf, &proof));
+    assert!(client.register(&participant, &leaf, &proof, &None));
 
     // Sanity: a brand-new address is not silently registered as a side
     // effect of someone else's register call.
@@ -579,7 +602,7 @@ fn test_deregister_success_and_re_register() {
     let (leaf, proof) = no_proof_args(&env);
 
     // Register participant
-    assert!(client.register(&participant, &leaf, &proof));
+    assert!(client.register(&participant, &leaf, &proof, &None));
     assert!(client.is_participant(&participant));
     assert_eq!(client.get_participant_count(), 1);
 
@@ -609,7 +632,7 @@ fn test_deregister_success_and_re_register() {
     );
 
     // Re-register works
-    assert!(client.register(&participant, &leaf, &proof));
+    assert!(client.register(&participant, &leaf, &proof, &None));
     assert!(client.is_participant(&participant));
     assert_eq!(client.get_participant_count(), 1);
 }
@@ -625,7 +648,7 @@ fn test_admin_deregister() {
     let (leaf, proof) = no_proof_args(&env);
 
     // Register participant
-    assert!(client.register(&participant, &leaf, &proof));
+    assert!(client.register(&participant, &leaf, &proof, &None));
     assert!(client.is_participant(&participant));
     assert_eq!(client.get_participant_count(), 1);
 
@@ -670,7 +693,7 @@ fn test_deregister_liveness_checks() {
     let (leaf, proof) = no_proof_args(&env);
 
     // Register
-    client.register(&participant, &leaf, &proof);
+    client.register(&participant, &leaf, &proof, &None);
 
     // Case 1: end_time != u64::MAX and now > end_time
     client.set_window(&admin, &0, &100, &200);
@@ -692,5 +715,275 @@ fn test_deregister_liveness_checks() {
     // Admin deregister bypasses all these checks
     assert!(client.admin_deregister(&admin, &3, &participant));
     assert!(!client.is_participant(&participant));
+}
+
+// ── storage pruning (#451) ────────────────────────────────────────────────────
+
+#[test]
+fn test_prune_expired_participants_empty_is_noop() {
+    let (env, _contract_id, client) = setup();
+    let admin = Address::generate(&env);
+    client.initialize(&admin);
+
+    assert_eq!(client.prune_expired_participants(&10), 0);
+}
+
+#[test]
+fn test_prune_expired_participants_removes_expired_entries() {
+    let (env, _contract_id, client) = setup();
+    let admin = Address::generate(&env);
+    let p1 = Address::generate(&env);
+    let p2 = Address::generate(&env);
+    client.initialize(&admin);
+    env.mock_all_auths();
+
+    let (leaf, proof) = no_proof_args(&env);
+    assert!(client.register(&p1, &leaf, &proof, &None));
+    assert!(client.register(&p2, &leaf, &proof, &None));
+    assert_eq!(client.get_participant_count(), 2);
+
+    // Advance past the participant TTL window.
+    env.ledger()
+        .with_mut(|li| li.sequence_number += PARTICIPANT_TTL_LEDGERS + 1);
+
+    let pruned = client.prune_expired_participants(&10);
+    assert_eq!(pruned, 2);
+    assert_eq!(client.get_participant_count(), 0);
+    assert!(!client.is_participant(&p1));
+    assert!(!client.is_participant(&p2));
+
+    // Pruning again finds nothing left to remove.
+    assert_eq!(client.prune_expired_participants(&10), 0);
+}
+
+#[test]
+fn test_prune_expired_participants_respects_max_entries_cap() {
+    let (env, _contract_id, client) = setup();
+    let admin = Address::generate(&env);
+    client.initialize(&admin);
+    env.mock_all_auths();
+
+    let (leaf, proof) = no_proof_args(&env);
+    for _ in 0..5 {
+        let p = Address::generate(&env);
+        assert!(client.register(&p, &leaf, &proof, &None));
+    }
+    assert_eq!(client.get_participant_count(), 5);
+
+    env.ledger()
+        .with_mut(|li| li.sequence_number += PARTICIPANT_TTL_LEDGERS + 1);
+
+    // Capped: only 2 entries removed per call even though 5 are expired.
+    assert_eq!(client.prune_expired_participants(&2), 2);
+    assert_eq!(client.get_participant_count(), 3);
+    assert_eq!(client.prune_expired_participants(&2), 2);
+    assert_eq!(client.get_participant_count(), 1);
+    assert_eq!(client.prune_expired_participants(&2), 1);
+    assert_eq!(client.get_participant_count(), 0);
+}
+
+#[test]
+fn test_storage_stats_tracks_participants_and_expired_estimate() {
+    let (env, _contract_id, client) = setup();
+    let admin = Address::generate(&env);
+    let p1 = Address::generate(&env);
+    client.initialize(&admin);
+    env.mock_all_auths();
+
+    let (leaf, proof) = no_proof_args(&env);
+    assert!(client.register(&p1, &leaf, &proof, &None));
+
+    let (participant_count, _nonce_count, expired) = client.storage_stats();
+    assert_eq!(participant_count, 1);
+    assert_eq!(expired, 0);
+
+    env.ledger()
+        .with_mut(|li| li.sequence_number += PARTICIPANT_TTL_LEDGERS + 1);
+
+    let (participant_count, _nonce_count, expired) = client.storage_stats();
+    assert_eq!(participant_count, 1);
+    assert_eq!(expired, 1);
+}
+
+// ── invite-only registration (#452) ───────────────────────────────────────────
+
+#[test]
+fn test_register_without_code_in_invite_only_mode_fails() {
+    let (env, _contract_id, client) = setup();
+    let admin = Address::generate(&env);
+    let participant = Address::generate(&env);
+    client.initialize(&admin);
+    env.mock_all_auths();
+
+    client.set_invite_only(&admin, &0, &true);
+    assert!(client.is_invite_only());
+
+    let (leaf, proof) = no_proof_args(&env);
+    assert_eq!(
+        client.try_register(&participant, &leaf, &proof, &None),
+        Err(Ok(Error::InviteCodeRequired))
+    );
+    assert!(!client.is_participant(&participant));
+}
+
+#[test]
+fn test_register_with_invalid_code_fails() {
+    let (env, _contract_id, client) = setup();
+    let admin = Address::generate(&env);
+    let participant = Address::generate(&env);
+    client.initialize(&admin);
+    env.mock_all_auths();
+
+    client.set_invite_only(&admin, &0, &true);
+
+    let real_code = Bytes::from_slice(&env, b"correct-code");
+    let real_hash: BytesN<32> = env.crypto().sha256(&real_code).into();
+    client.issue_invite(&admin, &1, &real_hash);
+
+    let wrong_code = Bytes::from_slice(&env, b"wrong-code");
+    let (leaf, proof) = no_proof_args(&env);
+    assert_eq!(
+        client.try_register(&participant, &leaf, &proof, &Some(wrong_code)),
+        Err(Ok(Error::InvalidInviteCode))
+    );
+    assert!(!client.is_participant(&participant));
+}
+
+#[test]
+fn test_register_with_valid_code_succeeds_then_second_use_fails() {
+    let (env, _contract_id, client) = setup();
+    let admin = Address::generate(&env);
+    let p1 = Address::generate(&env);
+    let p2 = Address::generate(&env);
+    client.initialize(&admin);
+    env.mock_all_auths();
+
+    client.set_invite_only(&admin, &0, &true);
+
+    let code = Bytes::from_slice(&env, b"my-invite-code");
+    let hash: BytesN<32> = env.crypto().sha256(&code).into();
+    client.issue_invite(&admin, &1, &hash);
+    assert!(!client.invite_used(&hash));
+
+    let (leaf, proof) = no_proof_args(&env);
+    assert!(client.register(&p1, &leaf, &proof, &Some(code.clone())));
+    assert!(client.is_participant(&p1));
+    assert!(client.invite_used(&hash));
+
+    // Second redemption of the same single-use code fails.
+    assert_eq!(
+        client.try_register(&p2, &leaf, &proof, &Some(code)),
+        Err(Ok(Error::InviteAlreadyUsed))
+    );
+    assert!(!client.is_participant(&p2));
+}
+
+#[test]
+fn test_revoke_invite_removes_it() {
+    let (env, _contract_id, client) = setup();
+    let admin = Address::generate(&env);
+    let participant = Address::generate(&env);
+    client.initialize(&admin);
+    env.mock_all_auths();
+
+    client.set_invite_only(&admin, &0, &true);
+    let code = Bytes::from_slice(&env, b"revoke-me");
+    let hash: BytesN<32> = env.crypto().sha256(&code).into();
+    client.issue_invite(&admin, &1, &hash);
+    client.revoke_invite(&admin, &2, &hash);
+
+    let (leaf, proof) = no_proof_args(&env);
+    assert_eq!(
+        client.try_register(&participant, &leaf, &proof, &Some(code)),
+        Err(Ok(Error::InvalidInviteCode))
+    );
+}
+
+// ── co-admin multisig for set_merkle_root (#454) ──────────────────────────────
+
+#[test]
+fn test_multisig_2_of_3_one_signature_fails() {
+    let (env, _contract_id, client) = setup();
+    let admin = Address::generate(&env);
+    client.initialize(&admin);
+    env.mock_all_auths();
+
+    let co1 = Address::generate(&env);
+    let co2 = Address::generate(&env);
+    let co3 = Address::generate(&env);
+    let key1 = gen_keypair(1);
+    let key2 = gen_keypair(2);
+    let key3 = gen_keypair(3);
+    let pub1 = BytesN::from_array(&env, &key1.verifying_key().to_bytes());
+    let pub2 = BytesN::from_array(&env, &key2.verifying_key().to_bytes());
+    let pub3 = BytesN::from_array(&env, &key3.verifying_key().to_bytes());
+
+    client.add_co_admin(&admin, &0, &co1, &pub1);
+    client.add_co_admin(&admin, &1, &co2, &pub2);
+    client.add_co_admin(&admin, &2, &co3, &pub3);
+    client.set_multisig_threshold(&admin, &3, &2);
+    assert_eq!(client.multisig_threshold(), 2);
+
+    let root: BytesN<32> = BytesN::from_array(&env, &[7u8; 32]);
+    let args_hash: BytesN<32> = env
+        .crypto()
+        .sha256(&Bytes::from_slice(&env, &root.to_array()))
+        .into();
+    let nonce = 42u64;
+    let sig1 = sign_op(&env, &key1, OP_SET_MERKLE_ROOT, nonce, &args_hash);
+
+    let signatures = vec![&env, (co1.clone(), sig1)];
+    let result = client.try_set_merkle_root(&admin, &nonce, &root, &signatures);
+    assert_eq!(result, Err(Ok(Error::InsufficientSignatures)));
+    assert!(client.get_merkle_root().is_none());
+}
+
+#[test]
+fn test_multisig_2_of_3_two_signatures_succeed_and_nonce_replay_fails() {
+    let (env, _contract_id, client) = setup();
+    let admin = Address::generate(&env);
+    client.initialize(&admin);
+    env.mock_all_auths();
+
+    let co1 = Address::generate(&env);
+    let co2 = Address::generate(&env);
+    let co3 = Address::generate(&env);
+    let key1 = gen_keypair(1);
+    let key2 = gen_keypair(2);
+    let key3 = gen_keypair(3);
+    let pub1 = BytesN::from_array(&env, &key1.verifying_key().to_bytes());
+    let pub2 = BytesN::from_array(&env, &key2.verifying_key().to_bytes());
+    let pub3 = BytesN::from_array(&env, &key3.verifying_key().to_bytes());
+
+    client.add_co_admin(&admin, &0, &co1, &pub1);
+    client.add_co_admin(&admin, &1, &co2, &pub2);
+    client.add_co_admin(&admin, &2, &co3, &pub3);
+    client.set_multisig_threshold(&admin, &3, &2);
+
+    let root: BytesN<32> = BytesN::from_array(&env, &[7u8; 32]);
+    let args_hash: BytesN<32> = env
+        .crypto()
+        .sha256(&Bytes::from_slice(&env, &root.to_array()))
+        .into();
+    let nonce = 42u64;
+    let sig1 = sign_op(&env, &key1, OP_SET_MERKLE_ROOT, nonce, &args_hash);
+    let sig2 = sign_op(&env, &key2, OP_SET_MERKLE_ROOT, nonce, &args_hash);
+
+    let signatures = vec![&env, (co1.clone(), sig1), (co2.clone(), sig2)];
+    client.set_merkle_root(&admin, &nonce, &root, &signatures);
+    assert_eq!(client.get_merkle_root(), Some(root.clone()));
+
+    // Replaying the same nonce (even with valid signatures) fails.
+    let root2: BytesN<32> = BytesN::from_array(&env, &[9u8; 32]);
+    let args_hash2: BytesN<32> = env
+        .crypto()
+        .sha256(&Bytes::from_slice(&env, &root2.to_array()))
+        .into();
+    let sig1b = sign_op(&env, &key1, OP_SET_MERKLE_ROOT, nonce, &args_hash2);
+    let sig2b = sign_op(&env, &key2, OP_SET_MERKLE_ROOT, nonce, &args_hash2);
+    let signatures2 = vec![&env, (co1, sig1b), (co2, sig2b)];
+    let result = client.try_set_merkle_root(&admin, &nonce, &root2, &signatures2);
+    assert_eq!(result, Err(Ok(Error::NonceReused)));
+    assert_eq!(client.get_merkle_root(), Some(root));
 }
 

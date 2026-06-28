@@ -10,11 +10,28 @@
 //! - `paused`: topics `(paused,)`, data `is_paused: bool`
 //! - `max_credit_per_call`: topics `(mxcredit,)`, data `max_amount: u64`
 //! - `campaign_multiplier`: topics `(multset, campaign_id)`, data `multiplier_bps: u32`
+//! - `pruned`: topics `(pruned, kind)`, data `count: u32`
+//!
+//! ## Storage pruning
+//!
+//! Multisig nonce records are not bumped indefinitely on Soroban;
+//! [`RewardsContract::prune_used_nonces`] lets anyone reclaim storage for
+//! nonces past their TTL, in capped batches. [`RewardsContract::storage_stats`]
+//! reports current usage for monitoring.
+//!
+//! ## Co-admin multisig
+//!
+//! `set_paused` is a critical operation: once a threshold is configured via
+//! `set_multisig_threshold`, it requires at least that many valid co-admin
+//! signatures (registered via `add_co_admin`) over `(op, nonce, args_hash)`,
+//! verified with ed25519. The nonce is consumed on use regardless of how many
+//! signers participated.
 
 #![no_std]
 
 use soroban_sdk::{
-    contract, contracterror, contractimpl, contractmeta, symbol_short, Address, Env, Symbol, Vec,
+    contract, contracterror, contractimpl, contractmeta, symbol_short, Address, Bytes, BytesN,
+    Env, Symbol, Vec,
 };
 
 #[contracterror]
@@ -28,6 +45,11 @@ pub enum Error {
     CreditLimitExceeded = 5,
     UnsupportedMigration = 6,
     InvalidMultiplier = 7,
+    InvalidThreshold = 8,
+    InsufficientSignatures = 9,
+    NonceReused = 10,
+    DuplicateSigner = 11,
+    UnknownSigner = 12,
 }
 
 contractmeta!(
@@ -52,6 +74,19 @@ const CURRENT_SCHEMA_VERSION: u32 = 1;
 const CAMPAIGN_MULTIPLIER: Symbol = symbol_short!("mult");
 const TIERS: Symbol = symbol_short!("tiers");
 const BPS_DENOMINATOR: u128 = 10_000;
+const PRUNED_EVENT: Symbol = symbol_short!("pruned");
+
+// ── multisig nonce storage (#451 / #454) ────────────────────────────────────
+const NONCE_USED: Symbol = symbol_short!("msnonce");
+const NONCE_REGISTRY: Symbol = symbol_short!("nreg");
+const NONCE_CURSOR: Symbol = symbol_short!("ncursor");
+/// Multisig nonces older than this many ledgers are eligible for pruning.
+const NONCE_TTL_LEDGERS: u32 = 10_000;
+
+// ── co-admin multisig (#454) ────────────────────────────────────────────────
+const CO_ADMINS: Symbol = symbol_short!("coadmin");
+const MULTISIG_THRESHOLD: Symbol = symbol_short!("msthresh");
+const OP_SET_PAUSED: u32 = 1;
 
 #[contract]
 pub struct RewardsContract;
@@ -73,6 +108,65 @@ fn ensure_not_paused(env: &Env) -> Result<(), Error> {
         return Err(Error::ContractPaused);
     }
 
+    Ok(())
+}
+
+/// Build the signed payload for a multisig operation: `sha256(op || nonce || args_hash)`.
+/// `op` is a stable per-function discriminant used in place of the function
+/// name string (Symbol byte access is not available in `no_std`).
+fn multisig_message(env: &Env, op: u32, nonce: u64, args_hash: &BytesN<32>) -> Bytes {
+    let mut buf = [0u8; 44];
+    buf[0..4].copy_from_slice(&op.to_be_bytes());
+    buf[4..12].copy_from_slice(&nonce.to_be_bytes());
+    buf[12..44].copy_from_slice(&args_hash.to_array());
+    Bytes::from_slice(env, &buf)
+}
+
+/// Verify at least `required` distinct co-admin signatures over
+/// `(op, nonce, args_hash)`, then consume `nonce` for replay protection.
+/// The nonce is consumed regardless of how many signers submitted.
+fn verify_multisig(
+    env: &Env,
+    op: u32,
+    args_hash: BytesN<32>,
+    nonce: u64,
+    signatures: &Vec<(Address, BytesN<64>)>,
+) -> Result<(), Error> {
+    let required: u32 = env.storage().instance().get(&MULTISIG_THRESHOLD).unwrap_or(0);
+    if required == 0 {
+        return Ok(());
+    }
+
+    let nonce_key = (NONCE_USED, nonce);
+    if env.storage().instance().get::<_, u32>(&nonce_key).is_some() {
+        return Err(Error::NonceReused);
+    }
+
+    let co_admins: Vec<(Address, BytesN<32>)> =
+        env.storage().instance().get(&CO_ADMINS).unwrap_or(Vec::new(env));
+    let message = multisig_message(env, op, nonce, &args_hash);
+
+    let mut seen: Vec<Address> = Vec::new(env);
+    for (signer, sig) in signatures.iter() {
+        if seen.iter().any(|s| s == signer) {
+            return Err(Error::DuplicateSigner);
+        }
+        let pubkey = co_admins
+            .iter()
+            .find_map(|(addr, key)| if addr == signer { Some(key) } else { None })
+            .ok_or(Error::UnknownSigner)?;
+        env.crypto().ed25519_verify(&pubkey, &message, &sig);
+        seen.push_back(signer.clone());
+    }
+
+    if seen.len() < required {
+        return Err(Error::InsufficientSignatures);
+    }
+
+    env.storage().instance().set(&nonce_key, &env.ledger().sequence());
+    let mut registry: Vec<u64> = env.storage().instance().get(&NONCE_REGISTRY).unwrap_or(Vec::new(env));
+    registry.push_back(nonce);
+    env.storage().instance().set(&NONCE_REGISTRY, &registry);
     Ok(())
 }
 
@@ -315,9 +409,29 @@ impl RewardsContract {
         Ok(())
     }
 
-    /// Pause the contract (admin only). Blocks credit and claim operations.
-    pub fn set_paused(env: Env, admin: Address, paused: bool) -> Result<(), Error> {
-        require_admin(&env, &admin)?;
+    /// Pause the contract. Blocks credit and claim operations.
+    ///
+    /// This is a critical operation: when a multisig threshold is configured
+    /// (see [`Self::set_multisig_threshold`]), `signatures` must contain at
+    /// least `required` valid co-admin signatures over
+    /// `(op, nonce, sha256(paused))`; otherwise pass an empty `Vec` and the
+    /// legacy single-admin check applies (`nonce` is ignored in that case).
+    pub fn set_paused(
+        env: Env,
+        admin: Address,
+        nonce: u64,
+        paused: bool,
+        signatures: Vec<(Address, BytesN<64>)>,
+    ) -> Result<(), Error> {
+        let threshold: u32 = env.storage().instance().get(&MULTISIG_THRESHOLD).unwrap_or(0);
+        if threshold > 0 {
+            let mut buf = [0u8; 1];
+            buf[0] = paused as u8;
+            let args_hash = env.crypto().sha256(&Bytes::from_slice(&env, &buf)).into();
+            verify_multisig(&env, OP_SET_PAUSED, args_hash, nonce, &signatures)?;
+        } else {
+            require_admin(&env, &admin)?;
+        }
         env.storage().instance().set(&PAUSED, &paused);
         env.events().publish((PAUSED_EVENT,), paused);
         env.storage().instance().extend_ttl(50, 100);
@@ -394,6 +508,136 @@ impl RewardsContract {
         );
 
         Ok(new_balance)
+    }
+
+    // ── nonce pruning (#451) ─────────────────────────────────────────────
+
+    /// Remove multisig nonce records older than [`NONCE_TTL_LEDGERS`], up to
+    /// `max_entries` per call. Callable by anyone since it only deletes
+    /// stale data. Returns the number of entries pruned.
+    pub fn prune_used_nonces(env: Env, max_entries: u32) -> u32 {
+        let registry: Vec<u64> = env
+            .storage()
+            .instance()
+            .get(&NONCE_REGISTRY)
+            .unwrap_or(Vec::new(&env));
+        let len = registry.len();
+        if len == 0 || max_entries == 0 {
+            return 0;
+        }
+
+        let now = env.ledger().sequence();
+        let mut cursor: u32 = env.storage().instance().get(&NONCE_CURSOR).unwrap_or(0);
+        if cursor >= len {
+            cursor = 0;
+        }
+
+        let mut pruned = 0u32;
+        let mut checked = 0u32;
+        let mut idx = cursor;
+        while checked < len && pruned < max_entries {
+            let nonce = registry.get(idx).unwrap();
+            let key = (NONCE_USED, nonce);
+            if let Some(used_at) = env.storage().instance().get::<_, u32>(&key) {
+                if now.saturating_sub(used_at) > NONCE_TTL_LEDGERS {
+                    env.storage().instance().remove(&key);
+                    pruned += 1;
+                }
+            }
+            idx = (idx + 1) % len;
+            checked += 1;
+        }
+        env.storage().instance().set(&NONCE_CURSOR, &idx);
+
+        if pruned > 0 {
+            env.events().publish((PRUNED_EVENT, symbol_short!("nonce")), pruned);
+        }
+        env.storage().instance().extend_ttl(50, 100);
+        pruned
+    }
+
+    /// Storage stats for monitoring: `(participant_count, nonce_count, expired_estimate)`.
+    /// `participant_count` is always `0` here; the rewards contract tracks
+    /// balances, not participants. `expired_estimate` counts currently-stale
+    /// nonce records.
+    pub fn storage_stats(env: Env) -> (u64, u64, u64) {
+        let registry: Vec<u64> = env
+            .storage()
+            .instance()
+            .get(&NONCE_REGISTRY)
+            .unwrap_or(Vec::new(&env));
+        let nonce_count = registry.len() as u64;
+
+        let now = env.ledger().sequence();
+        let mut expired = 0u64;
+        for nonce in registry.iter() {
+            if let Some(used_at) = env.storage().instance().get::<_, u32>(&(NONCE_USED, nonce)) {
+                if now.saturating_sub(used_at) > NONCE_TTL_LEDGERS {
+                    expired += 1;
+                }
+            }
+        }
+        (0, nonce_count, expired)
+    }
+
+    // ── co-admin multisig (#454) ────────────────────────────────────────
+
+    /// Register a co-admin's ed25519 public key for multisig verification
+    /// (admin only). Overwrites the key if `co_admin` is already registered.
+    pub fn add_co_admin(env: Env, admin: Address, co_admin: Address, pubkey: BytesN<32>) -> Result<(), Error> {
+        require_admin(&env, &admin)?;
+        let mut co_admins: Vec<(Address, BytesN<32>)> =
+            env.storage().instance().get(&CO_ADMINS).unwrap_or(Vec::new(&env));
+        let mut found = false;
+        for i in 0..co_admins.len() {
+            let (addr, _) = co_admins.get(i).unwrap();
+            if addr == co_admin {
+                co_admins.set(i, (co_admin.clone(), pubkey.clone()));
+                found = true;
+                break;
+            }
+        }
+        if !found {
+            co_admins.push_back((co_admin, pubkey));
+        }
+        env.storage().instance().set(&CO_ADMINS, &co_admins);
+        env.storage().instance().extend_ttl(50, 100);
+        Ok(())
+    }
+
+    /// Remove a co-admin from the multisig signer set (admin only).
+    pub fn remove_co_admin(env: Env, admin: Address, co_admin: Address) -> Result<(), Error> {
+        require_admin(&env, &admin)?;
+        let co_admins: Vec<(Address, BytesN<32>)> =
+            env.storage().instance().get(&CO_ADMINS).unwrap_or(Vec::new(&env));
+        let mut remaining = Vec::new(&env);
+        for (addr, pubkey) in co_admins.iter() {
+            if addr != co_admin {
+                remaining.push_back((addr, pubkey));
+            }
+        }
+        env.storage().instance().set(&CO_ADMINS, &remaining);
+        env.storage().instance().extend_ttl(50, 100);
+        Ok(())
+    }
+
+    /// Set the M-of-N multisig threshold for critical operations (admin only).
+    /// `required = 0` disables multisig (legacy single-admin auth applies).
+    pub fn set_multisig_threshold(env: Env, admin: Address, required: u32) -> Result<(), Error> {
+        require_admin(&env, &admin)?;
+        let co_admins: Vec<(Address, BytesN<32>)> =
+            env.storage().instance().get(&CO_ADMINS).unwrap_or(Vec::new(&env));
+        if required > co_admins.len() {
+            return Err(Error::InvalidThreshold);
+        }
+        env.storage().instance().set(&MULTISIG_THRESHOLD, &required);
+        env.storage().instance().extend_ttl(50, 100);
+        Ok(())
+    }
+
+    /// Returns the configured M-of-N multisig threshold (0 = disabled).
+    pub fn multisig_threshold(env: Env) -> u32 {
+        env.storage().instance().get(&MULTISIG_THRESHOLD).unwrap_or(0)
     }
 }
 

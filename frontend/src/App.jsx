@@ -23,6 +23,7 @@ const About = lazy(() => import('./About'));
 const TransactionHistory = lazy(() => import('./TransactionHistory'));
 const EmbedCampaign = lazy(() => import('./pages/EmbedCampaign'));
 const PublicProfile = lazy(() => import('./pages/PublicProfile'));
+const UserProfile = lazy(() => import('./pages/UserProfile'));
 import { applyTheme, getPreferredTheme, THEME_STORAGE_KEY } from './theme';
 import { getRuntimeConfig, initializeRuntimeConfig, setRuntimeStellarNetwork } from './config';
 import {
@@ -350,6 +351,23 @@ export default function App() {
           />
           <Route path="/embed/campaign/:id" element={<EmbedCampaign />} />
           <Route path="/u/:address" element={<PublicProfile />} />
+          <Route
+            path="/profile"
+            element={
+              <UserProfile
+                theme={theme}
+                onToggleTheme={toggleTheme}
+                stellarNetwork={runtimeConfig.stellar.network}
+                onChangeStellarNetwork={handleChangeStellarNetwork}
+                walletAddress={walletAddress}
+                walletBalance={walletBalance}
+                isWalletLoading={isWalletLoading}
+                isWalletBalanceLoading={isWalletBalanceLoading}
+                onConnectWallet={openWalletModal}
+                onDisconnectWallet={disconnectWallet}
+              />
+            }
+          />
         </Routes>
       </Suspense>
       <WalletModal
